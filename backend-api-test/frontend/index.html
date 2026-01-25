@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OKU Desk - Backend API Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { margin-bottom: 10px; color: #4CAF50; }
+        .mode-indicator {
+            background: #333;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #4CAF50;
+        }
+        .upload-area {
+            border: 2px dashed #666;
+            border-radius: 10px;
+            padding: 60px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #222;
+        }
+        .upload-area:hover { border-color: #4CAF50; background: #2a2a2a; }
+        .upload-area.dragover { border-color: #4CAF50; background: #1a3a1a; }
+        .controls {
+            background: #222;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+        }
+        .controls label {
+            display: block;
+            margin-bottom: 15px;
+        }
+        .controls input {
+            width: 100px;
+            padding: 5px;
+            margin-left: 10px;
+            background: #333;
+            color: #e0e0e0;
+            border: 1px solid #555;
+            border-radius: 3px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-top: 10px;
+        }
+        button:hover { background: #45a049; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #222;
+        }
+        #status.success { background: #1a3a1a; color: #4CAF50; }
+        #status.error { background: #3a1a1a; color: #f44336; }
+        #status.info { background: #1a1a3a; color: #2196F3; }
+        #svgPreview {
+            max-width: 100%;
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        #svgPreview svg {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OKU Desk Laser Interface</h1>
+        <div class="mode-indicator">
+            🔌 <strong>Mode:</strong> Backend API (Python/Inkscape) - <em>Test</em>
+        </div>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>📁 Glisser-déposer un SVG ici ou cliquer pour parcourir</p>
+            <input type="file" id="fileInput" accept=".svg" style="display: none;">
+        </div>
+        
+        <div id="preview" style="display: none;">
+            <h2>Prévisualisation</h2>
+            <div id="svgPreview"></div>
+            
+            <div class="controls">
+                <label>
+                    Vitesse (mm/min): 
+                    <input type="number" id="speed" value="600" min="10" max="6000">
+                </label>
+                <label>
+                    Puissance (%): 
+                    <input type="number" id="power" value="80" min="1" max="100">
+                </label>
+                <label>
+                    Passes: 
+                    <input type="number" id="passes" value="1" min="1" max="10">
+                </label>
+                <label>
+                    Origine (0,0):
+                    <select id="origin" style="margin-left:10px; padding:5px; background:#333; color:#e0e0e0; border:1px solid #555; border-radius:3px;">
+                        <option value="bottom-left" selected>Bas-gauche</option>
+                        <option value="bottom-right">Bas-droite</option>
+                        <option value="top-left">Haut-gauche</option>
+                        <option value="top-right">Haut-droite</option>
+                        <option value="center">Centre</option>
+                    </select>
+                </label>
+                <button id="generateBtn">🚀 Générer G-code</button>
+            </div>
+        </div>
+        
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // Port par défaut (changé à 5001 pour éviter conflit avec AirPlay sur macOS)
+        // Le frontend détectera automatiquement le port utilisé par le backend
+        let API_URL = 'http://localhost:5001';
+        
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const preview = document.getElementById('preview');
+        const svgPreview = document.getElementById('svgPreview');
+        const generateBtn = document.getElementById('generateBtn');
+        const status = document.getElementById('status');
+        
+        let currentSVG = null;
+        
+        // Upload handling
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0] || fileInput.files[0];
+            if (file && file.name.endsWith('.svg')) {
+                loadSVG(file);
+            } else {
+                showStatus('❌ Veuillez sélectionner un fichier SVG', 'error');
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files[0]) {
+                loadSVG(e.target.files[0]);
+            }
+        });
+        
+        async function loadSVG(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                currentSVG = e.target.result;
+                svgPreview.innerHTML = currentSVG;
+                preview.style.display = 'block';
+                showStatus('✅ SVG chargé', 'success');
+            };
+            reader.readAsText(file);
+        }
+        
+        generateBtn.addEventListener('click', async () => {
+            if (!currentSVG) {
+                showStatus('❌ Aucun SVG chargé', 'error');
+                return;
+            }
+            
+            showStatus('⏳ Génération en cours...', 'info');
+            generateBtn.disabled = true;
+            
+            try {
+                // Validate SVG first
+                const validateResponse = await fetch(`${API_URL}/api/validate-svg`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ svg_content: currentSVG })
+                });
+                
+                const validateData = await validateResponse.json();
+                if (!validateData.valid) {
+                    showStatus(`❌ SVG invalide: ${validateData.error}`, 'error');
+                    generateBtn.disabled = false;
+                    return;
+                }
+                
+                // Generate G-code
+                const response = await fetch(`${API_URL}/api/generate-vector`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        svg_content: currentSVG,
+                        speed: parseInt(document.getElementById('speed').value),
+                        power: parseFloat(document.getElementById('power').value),
+                        passes: parseInt(document.getElementById('passes').value),
+                        origin: document.getElementById('origin').value
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.success && data.gcode) {
+                    // Download G-code file
+                    const blob = new Blob([data.gcode], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = data.filename || 'output.gco';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    
+                    showStatus(`✅ G-code généré (${data.size} bytes) et téléchargé !`, 'success');
+                } else {
+                    // Gérer les erreurs spécifiques
+                    let errorMsg = data.error || data.details || 'Unknown error';
+                    
+                    if (response.status === 501 || data.status === 'coming_soon') {
+                        // Feature not implemented yet
+                        errorMsg = '🚧 Génération G-code pas encore implémentée\n\n';
+                        errorMsg += 'Cette fonctionnalité nécessite d\'adapter les scripts Python Inkscape.\n';
+                        errorMsg += 'Pour l\'instant, utilise l\'interface web pure (oku-laser-interface/index.html)';
+                        showStatus(errorMsg, 'info');
+                    } else {
+                        showStatus(`❌ Erreur: ${errorMsg}`, 'error');
+                    }
+                    
+                    if (data.note) {
+                        console.log('Note:', data.note);
+                    }
+                    if (data.traceback) {
+                        console.error('Traceback:', data.traceback);
+                    }
+                }
+            } catch (error) {
+                showStatus(`❌ Erreur de connexion: ${error.message}`, 'error');
+                console.error(error);
+            } finally {
+                generateBtn.disabled = false;
+            }
+        });
+        
+        function showStatus(message, type = 'info') {
+            status.textContent = message;
+            status.className = type;
+        }
+        
+        // Check API health on load (essayer plusieurs ports)
+        async function checkHealth() {
+            // Vérifier si on est en file:// (problème CORS)
+            if (window.location.protocol === 'file:') {
+                showStatus('⚠️ Fichier ouvert en file:// - Utilise http://localhost:5001/app ou un serveur HTTP', 'error');
+                console.error('CORS Error: Le fichier est ouvert en file://. Utilisez:');
+                console.error('  1. http://localhost:5001/app (servi par Flask)');
+                console.error('  2. python -m http.server 8080 puis http://localhost:8080/frontend/index.html');
+                return;
+            }
+            
+            const ports = [5001, 5002, 5003, 5004, 5005, 5000]; // 5001 par défaut, puis autres
+            
+            for (const port of ports) {
+                try {
+                    const testUrl = `http://localhost:${port}/api/health`;
+                    const response = await fetch(testUrl, {
+                        method: 'GET',
+                        mode: 'cors',
+                        cache: 'no-cache'
+                    });
+                    
+                    if (!response.ok) continue;
+                    
+                    const data = await response.json();
+                    if (data.status === 'ok') {
+                        // Mettre à jour l'URL de l'API si port différent
+                        API_URL = `http://localhost:${port}`;
+                        if (port !== 5001) {
+                            showStatus(`✅ Backend API connecté sur port ${port} (v${data.version})`, 'success');
+                        } else {
+                            showStatus(`✅ Backend API connecté (v${data.version})`, 'success');
+                        }
+                        return;
+                    }
+                } catch (error) {
+                    // Erreur réseau - essayer le port suivant
+                    console.debug(`Port ${port} non disponible:`, error.message);
+                    continue;
+                }
+            }
+            
+            showStatus('⚠️ Backend API non disponible. Démarre le serveur avec: ./start.sh', 'error');
+            console.error('Aucun backend trouvé sur les ports 5001-5005');
+            console.error('Vérifie que le backend est démarré: cd backend-api-test && ./start.sh');
+        }
+        
+        checkHealth();
+    </script>
+</body>
+</html>

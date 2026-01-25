@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OKU Desk Laser Controller</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts for a techy look -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Left Sidebar: Controls & File Info -->
+        <aside class="sidebar-left">
+            <div class="logo-area">
+                <h1>🔥 OKU<span>DESK</span></h1>
+                <span class="version">v0.2 BETA</span>
+            </div>
+
+            <div class="control-group">
+                <h3>Global Settings</h3>
+                
+                <div class="setting-item">
+                    <label>Travel Speed</label>
+                    <div class="input-with-unit">
+                        <input type="number" id="travelSpeed" value="5000" min="100" max="10000">
+                        <span>mm/min</span>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                     <label>Work Area</label>
+                     <div class="info-display">500 × 285 × 50 mm</div>
+                </div>
+
+                <div class="setting-item">
+                    <label>Job Origin (0,0)</label>
+                    <div class="origin-picker" role="radiogroup" aria-label="Job origin (0,0)">
+                        <label class="origin-opt">
+                            <input type="radio" name="originMode" value="top-left">
+                            <span>TL</span>
+                        </label>
+                        <label class="origin-opt">
+                            <input type="radio" name="originMode" value="top-right">
+                            <span>TR</span>
+                        </label>
+                        <label class="origin-opt">
+                            <input type="radio" name="originMode" value="bottom-left" checked>
+                            <span>BL</span>
+                        </label>
+                        <label class="origin-opt">
+                            <input type="radio" name="originMode" value="bottom-right">
+                            <span>BR</span>
+                        </label>
+                        <label class="origin-opt origin-opt-wide">
+                            <input type="radio" name="originMode" value="center">
+                            <span>C</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <label>Material Presets</label>
+                    <div class="material-row">
+                        <select id="materialPreset" class="select">
+                            <option value="" selected>Select material…</option>
+                            <option value="fabric">Fabric</option>
+                            <option value="felt">Felt</option>
+                            <option value="foam_board">Foam board</option>
+                            <option value="eva_rubber">EVA rubber</option>
+                            <option value="mdf">MDF</option>
+                            <option value="plywood">Plywood</option>
+                            <option value="balsa">Balsa wood</option>
+                            <option value="kraftplex">Kraftplex</option>
+                            <option value="cardboard">Cardboard</option>
+                            <option value="paperboard">Paperboard</option>
+                            <option value="paper">Paper</option>
+                            <option value="leather">Leather</option>
+                            <option value="cork">Cork</option>
+                            <option value="opaque_acrylic">Opaque acrylic</option>
+                        </select>
+                        <select id="materialMode" class="select">
+                            <option value="cut" selected>Cut</option>
+                            <option value="engrave">Engrave</option>
+                        </select>
+                    </div>
+                    <div class="material-actions">
+                        <button id="applyMaterialBtn" class="btn-secondary" disabled>Apply to enabled jobs</button>
+                    </div>
+                    <div id="materialHint" class="hint" style="display:none;"></div>
+                </div>
+            </div>
+
+            <div class="file-drop-area" id="dropZone">
+                <div class="drop-content">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <span>Import SVG</span>
+                </div>
+                <input type="file" id="fileInput" accept=".svg" hidden>
+            </div>
+
+            <div class="stats-panel" id="statsPanel" style="display:none;">
+                <h3>Job Stats</h3>
+                <div class="stat-row">
+                    <span>Dimensions:</span>
+                    <span id="statDim">—</span>
+                </div>
+                <div class="stat-row">
+                    <span>Est. Time:</span>
+                    <span id="statTime" class="highlight-time">—</span>
+                </div>
+            </div>
+
+            <div class="action-area">
+                <button id="exportBtn" class="btn-primary" disabled>
+                    Generate G-Code
+                </button>
+                <div class="support-area">
+                    <a id="gitlabLink" class="donate-link" href="#" target="_blank" rel="noopener noreferrer">
+                        GitLab
+                    </a>
+                    <a id="donateLink" class="donate-link" href="#" target="_blank" rel="noopener noreferrer">
+                        Buy me a coffee
+                    </a>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Area: Workspace Visualization -->
+        <main class="workspace-area">
+            <div class="canvas-container" id="canvasContainer">
+                <!-- The Bed (Physical constraints) -->
+                <div class="machine-bed">
+                    <div class="grid-lines"></div>
+                    <!-- The SVG Content Layer -->
+                    <div id="svgLayer" class="svg-layer"></div>
+                    <!-- Origin Marker -->
+                    <div class="origin-marker"></div>
+                </div>
+            </div>
+            <div class="workspace-controls">
+                <button id="fitViewBtn" title="Fit to View" aria-label="Fit to View">⤢</button>
+                <button id="centerJobBtn" title="Center Job" aria-label="Center Job">⌖</button>
+            </div>
+        </main>
+
+        <!-- Right Sidebar: Layers & Jobs -->
+        <aside class="sidebar-right">
+            <div class="sidebar-header">
+                <h2>Layers / Jobs</h2>
+            </div>
+            <div id="jobsContainer" class="jobs-container">
+                <div class="empty-state">No file loaded</div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- First-run modal -->
+    <div id="firstRunOverlay" class="modal-overlay" style="display:none;">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="firstRunTitle">
+            <div class="modal-header">
+                <h2 id="firstRunTitle">Why this project exists</h2>
+                <button id="firstRunClose" class="modal-close" aria-label="Close">✕</button>
+            </div>
+            <div class="modal-body">
+                <p>
+                    Cette interface existe parce que le workflow macOS original pour l’Oku Desk a été abandonné.
+                    Des usagers se sont retrouvés sans outil fiable, maintenu, ni support adéquat.
+                </p>
+                <ul>
+                    <li><strong>Abandon du logiciel macOS</strong> (NomadTech) et absence de maintenance à long terme.</li>
+                    <li><strong>Manque de soutien aux usagers</strong> et frustration face à un outil “boîte noire”.</li>
+                    <li><strong>Manque de respect</strong> quand les utilisateurs deviennent dépendants d’un workflow qui disparaît.</li>
+                </ul>
+                <p>
+                    Notre objectif: un workflow transparent, reproductible, documenté, et maintenu par la communauté.
+                </p>
+                <p>
+                    <strong>Crédits / inspirations:</strong> on reconnaît explicitement les projets dont nous nous sommes inspirés,
+                    notamment les extensions Inkscape NomadTech (GPL) et les projets amont cités dans leurs en-têtes
+                    (Nick Drobchenko, hugomatic, Aaron Spike, TurnkeyTyranny, etc.).
+                </p>
+                <p class="modal-note">
+                    Licence: <strong>GPL-3.0-or-later</strong> (choisie pour compatibilité avec le code GPLv2-or-later de NomadTech et les projets amont).
+                </p>
+            </div>
+            <div class="modal-actions">
+                <a id="firstRunGitlab" class="btn-secondary" href="#" target="_blank" rel="noopener noreferrer">View on GitLab</a>
+                <a id="firstRunDonate" class="btn-primary" href="#" target="_blank" rel="noopener noreferrer">Buy me a coffee</a>
+            </div>
+        </div>
+    </div>
+
+    <script src="svg-parser.js"></script>
+    <script src="gcode-generator.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

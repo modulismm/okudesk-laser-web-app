@@ -1,0 +1,6 @@
+# Minimal requirements for testing (without numpy/Pillow if they fail)
+flask>=3.0.0
+flask-cors>=4.0.0
+lxml>=5.0.0
+
+# Note: numpy and Pillow can be added later when needed for full functionality

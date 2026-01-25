@@ -1,0 +1,14 @@
+# Core dependencies
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# XML/SVG processing
+lxml>=5.0.0
+
+# Image processing (may require compilation on Python 3.13)
+# If installation fails, try: pip install --upgrade pip setuptools wheel
+Pillow>=10.0.0
+
+# Numerical computing (may require compilation on Python 3.13)
+# Alternative: use Python 3.11 or 3.12 for better compatibility
+numpy>=1.24.0

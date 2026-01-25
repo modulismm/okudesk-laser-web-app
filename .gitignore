@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Node.js (si utilisé plus tard)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build / Dist
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Backend venv (déjà dans backend-api-test/.gitignore)
+backend-api-test/backend/venv/
+
+# Keep repo lean (do not track large binaries / generated artifacts)
+examples/
+firmware/
+docs/
+nomadtech/
+backend/  # legacy skeleton backend (we deploy backend-api-test/backend instead)
