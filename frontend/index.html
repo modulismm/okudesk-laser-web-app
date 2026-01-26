@@ -63,6 +63,20 @@
                             <input type="radio" name="originMode" value="center">
                             <span>C</span>
                         </label>
+                        <label class="origin-opt origin-opt-wide">
+                            <input type="radio" name="originMode" value="custom">
+                            <span>Custom</span>
+                        </label>
+                    </div>
+                    <div id="customOriginInputs" class="custom-origin-inputs" style="display:none; margin-top: 8px;">
+                        <div class="input-with-unit" style="margin-bottom: 6px;">
+                            <input type="number" id="originX" value="0" min="0" max="500" step="0.1" placeholder="X">
+                            <span>mm</span>
+                        </div>
+                        <div class="input-with-unit">
+                            <input type="number" id="originY" value="0" min="0" max="285" step="0.1" placeholder="Y">
+                            <span>mm</span>
+                        </div>
                     </div>
                 </div>
 

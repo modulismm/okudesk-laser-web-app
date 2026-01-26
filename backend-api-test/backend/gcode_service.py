@@ -43,6 +43,7 @@ ALLOWED_ORIGINS = (
     "top-left",
     "top-right",
     "center",
+    "custom",
 )
 
 MAX_RASTER_PIXELS_PER_LINE = 80
@@ -1057,6 +1058,8 @@ def _generate_gcode_from_paths(
     power_pct: float,
     passes: int,
     origin: str,
+    origin_x: float = None,
+    origin_y: float = None,
 ) -> str:
     # 1) Parse paths to points (scaled to mm). NOTE: `path_ds` can be a list of raw `d` strings,
     # but for correct Inkscape output we prefer extracting drawables with transforms.
@@ -1153,15 +1156,27 @@ def _generate_gcode_from_paths(
     offset_y = -miny if math.isfinite(miny) else 0.0
 
     # Then anchor within the bed based on origin choice
-    if origin in ("bottom-right", "top-right"):
-        offset_x += (BED_W_MM - width)
-    elif origin == "center":
-        offset_x += (BED_W_MM - width) / 2.0
+    if origin == "custom":
+        if origin_x is not None and origin_y is not None:
+            # Custom origin: user specifies exact X, Y position (in machine coordinates, bottom-left origin)
+            # We need to place the design so its top-left corner (after offset) is at (origin_x, origin_y)
+            # But SVG Y is top-down, machine Y is bottom-up, so we flip
+            offset_x += origin_x
+            offset_y += (BED_H_MM - origin_y - height)  # Flip Y: machine Y=0 is bottom, SVG Y=0 is top
+        else:
+            # Fallback to bottom-left if custom coords not provided
+            origin = "bottom-left"
+    
+    if origin != "custom":
+        if origin in ("bottom-right", "top-right"):
+            offset_x += (BED_W_MM - width)
+        elif origin == "center":
+            offset_x += (BED_W_MM - width) / 2.0
 
-    if origin in ("top-left", "top-right"):
-        offset_y += (BED_H_MM - height)
-    elif origin == "center":
-        offset_y += (BED_H_MM - height) / 2.0
+        if origin in ("top-left", "top-right"):
+            offset_y += (BED_H_MM - height)
+        elif origin == "center":
+            offset_y += (BED_H_MM - height) / 2.0
 
     # Apply offsets to bounds
     b_minx = (minx + offset_x) if math.isfinite(minx) else 0.0
@@ -1287,16 +1302,18 @@ def generate_vector_gcode(svg_path, speed=1000, power=100.0, passes=1, origin: s
         if d and str(d).strip():
             path_ds.append((str(d), mat))
 
-    return _generate_gcode_from_paths(
-        path_ds=path_ds,
-        svg_h_mm=svg_h_mm,
-        scale_x=scale_x,
-        scale_y=scale_y,
-        speed=speed_i,
-        power_pct=power_f,
-        passes=passes_i,
-        origin=origin,
-    )
+        return _generate_gcode_from_paths(
+            path_ds=path_ds,
+            svg_h_mm=svg_h_mm,
+            scale_x=scale_x,
+            scale_y=scale_y,
+            speed=speed_i,
+            power_pct=power_f,
+            passes=passes_i,
+            origin=origin,
+            origin_x=None,  # Single-job mode doesn't support custom origin yet
+            origin_y=None,
+        )
 
 
 def _parse_style(style: Optional[str]) -> dict:
@@ -1352,7 +1369,7 @@ def _element_color(el) -> Optional[str]:
     return _normalize_color(stroke)
 
 
-def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bottom-left") -> str:
+def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bottom-left", origin_x: float = None, origin_y: float = None) -> str:
     """
     Advanced generation: use ordered per-color jobs coming from the UI.
     `jobs` items expected like: {color, enabled, speed, power, passes}
@@ -1431,6 +1448,8 @@ def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bot
         scale_x=scale_x,
         scale_y=scale_y,
         origin=origin,
+        origin_x=origin_x,
+        origin_y=origin_y,
     )
 
 
@@ -1440,6 +1459,8 @@ def _generate_gcode_from_job_batches(
     scale_x: float,
     scale_y: float,
     origin: str,
+    origin_x: float = None,
+    origin_y: float = None,
 ) -> str:
     """
     Multi-job generator: emits a single file with one metadata block + thumbnail,
@@ -1513,14 +1534,27 @@ def _generate_gcode_from_job_batches(
     h = max(0.0, maxy - miny)
     offset_x = -minx if math.isfinite(minx) else 0.0
     offset_y = -miny if math.isfinite(miny) else 0.0
-    if origin in ("bottom-right", "top-right"):
-        offset_x += (BED_W_MM - w)
-    elif origin == "center":
-        offset_x += (BED_W_MM - w) / 2.0
-    if origin in ("top-left", "top-right"):
-        offset_y += (BED_H_MM - h)
-    elif origin == "center":
-        offset_y += (BED_H_MM - h) / 2.0
+    
+    if origin == "custom":
+        if origin_x is not None and origin_y is not None:
+            # Custom origin: user specifies exact X, Y position (in machine coordinates, bottom-left origin)
+            # We need to place the design so its top-left corner (after offset) is at (origin_x, origin_y)
+            # But SVG Y is top-down, machine Y is bottom-up, so we flip
+            offset_x += origin_x
+            offset_y += (BED_H_MM - origin_y - h)  # Flip Y: machine Y=0 is bottom, SVG Y=0 is top
+        else:
+            # Fallback to bottom-left if custom coords not provided
+            origin = "bottom-left"
+    
+    if origin != "custom":
+        if origin in ("bottom-right", "top-right"):
+            offset_x += (BED_W_MM - w)
+        elif origin == "center":
+            offset_x += (BED_W_MM - w) / 2.0
+        if origin in ("top-left", "top-right"):
+            offset_y += (BED_H_MM - h)
+        elif origin == "center":
+            offset_y += (BED_H_MM - h) / 2.0
 
     b_minx = (minx + offset_x) if math.isfinite(minx) else 0.0
     b_maxx = (maxx + offset_x) if math.isfinite(maxx) else 0.0

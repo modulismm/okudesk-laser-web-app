@@ -408,6 +408,13 @@ h3 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margi
 .origin-marker.origin-top-left { left: 0; top: 0; bottom: auto; right: auto; transform: scaleY(-1); }
 .origin-marker.origin-top-right { right: 0; top: 0; left: auto; bottom: auto; transform: scale(-1); }
 .origin-marker.origin-center { left: 50%; top: 50%; bottom: auto; right: auto; transform: translate(-50%, -50%); border-left: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+.origin-marker.origin-custom { border-left: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+
+.custom-origin-inputs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
 
 .svg-layer {
     position: absolute;

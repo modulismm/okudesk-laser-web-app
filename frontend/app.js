@@ -14,6 +14,8 @@ const appState = {
     scale: 1,
     svgElement: null,
     originMode: 'bottom-left',
+    originX: 0,
+    originY: 0,
     mode: 'vector',
     rasterEnabled: false,
     rasterUrl: '/raster'
@@ -104,6 +106,9 @@ function init() {
         canvasContainer: document.getElementById('canvasContainer'),
         originInputs: document.querySelectorAll('input[name="originMode"]'),
         originMarker: document.querySelector('.origin-marker'),
+        customOriginInputs: document.getElementById('customOriginInputs'),
+        originX: document.getElementById('originX'),
+        originY: document.getElementById('originY'),
         materialPreset: document.getElementById('materialPreset'),
         materialMode: document.getElementById('materialMode'),
         applyMaterialBtn: document.getElementById('applyMaterialBtn'),
@@ -326,11 +331,25 @@ function setupControls() {
         elements.originInputs.forEach(input => {
             input.addEventListener('change', () => {
                 appState.originMode = getOriginMode();
+                updateCustomOriginVisibility();
                 updateOriginMarker();
                 if (appState.svgData) renderWorkspace(appState.svgData);
             });
         });
+        if (elements.originX) {
+            elements.originX.addEventListener('input', () => {
+                appState.originX = parseFloat(elements.originX.value) || 0;
+                if (appState.svgData) renderWorkspace(appState.svgData);
+            });
+        }
+        if (elements.originY) {
+            elements.originY.addEventListener('input', () => {
+                appState.originY = parseFloat(elements.originY.value) || 0;
+                if (appState.svgData) renderWorkspace(appState.svgData);
+            });
+        }
         appState.originMode = getOriginMode();
+        updateCustomOriginVisibility();
         updateOriginMarker();
     }
 }
@@ -416,6 +435,16 @@ function getOriginMode() {
     return checked ? checked.value : 'bottom-left';
 }
 
+function updateCustomOriginVisibility() {
+    const { customOriginInputs } = elements;
+    if (!customOriginInputs) return;
+    customOriginInputs.style.display = appState.originMode === 'custom' ? 'block' : 'none';
+    if (appState.originMode === 'custom') {
+        if (elements.originX) elements.originX.value = appState.originX;
+        if (elements.originY) elements.originY.value = appState.originY;
+    }
+}
+
 function updateOriginMarker() {
     const m = elements.originMarker;
     if (!m) return;
@@ -424,9 +453,27 @@ function updateOriginMarker() {
         'origin-bottom-right',
         'origin-top-left',
         'origin-top-right',
-        'origin-center'
+        'origin-center',
+        'origin-custom'
     );
-    m.classList.add(`origin-${appState.originMode}`);
+    if (appState.originMode === 'custom') {
+        m.classList.add('origin-custom');
+        // Position custom marker at specified coordinates
+        const x = Math.min(Math.max(appState.originX, 0), 500);
+        const y = Math.min(Math.max(285 - appState.originY, 0), 285); // Flip Y for SVG
+        m.style.left = `${(x / 500) * 100}%`;
+        m.style.bottom = `${(y / 285) * 100}%`;
+        m.style.top = 'auto';
+        m.style.right = 'auto';
+        m.style.transform = 'none';
+    } else {
+        m.classList.add(`origin-${appState.originMode}`);
+        m.style.left = '';
+        m.style.bottom = '';
+        m.style.top = '';
+        m.style.right = '';
+        m.style.transform = '';
+    }
 }
 
 /**
@@ -497,6 +544,10 @@ function renderWorkspace(data) {
         case 'center':
             x = (500 - w) / 2;
             y = (285 - h) / 2;
+            break;
+        case 'custom':
+            x = Math.max(0, Math.min(appState.originX, 500 - w));
+            y = Math.max(0, Math.min(285 - appState.originY - h, 285 - h));
             break;
         default:
             x = 0;
@@ -721,15 +772,20 @@ async function generateViaBackendOrFallback(travelSpeed) {
 
     // Try backend advanced endpoint (multi-jobs, order, origin)
     try {
+        const payload = {
+            svg_content: svgString,
+            origin: appState.originMode,
+            travel_speed: travelSpeed,
+            jobs: appState.svgData.jobs
+        };
+        if (appState.originMode === 'custom') {
+            payload.origin_x = appState.originX;
+            payload.origin_y = appState.originY;
+        }
         const res = await fetch('/api/generate-vector-advanced', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                svg_content: svgString,
-                origin: appState.originMode,
-                travel_speed: travelSpeed,
-                jobs: appState.svgData.jobs
-            })
+            body: JSON.stringify(payload)
         });
         const data = await res.json();
         if (res.ok && data && data.success && data.gcode) {

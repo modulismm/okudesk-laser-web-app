@@ -229,12 +229,26 @@ def generate_vector_advanced():
         svg_content = data.get('svg_content')
         origin = str(data.get('origin', 'bottom-left') or 'bottom-left').strip().lower()
         jobs = data.get('jobs') or []
+        origin_x = data.get('origin_x')
+        origin_y = data.get('origin_y')
 
         if not svg_content:
             return jsonify({'error': 'svg_content is required'}), 400
 
-        if origin not in ('bottom-left', 'bottom-right', 'top-left', 'top-right', 'center'):
+        if origin not in ('bottom-left', 'bottom-right', 'top-left', 'top-right', 'center', 'custom'):
             origin = 'bottom-left'
+
+        # Validate custom origin coordinates
+        if origin == 'custom':
+            try:
+                origin_x = float(origin_x) if origin_x is not None else None
+                origin_y = float(origin_y) if origin_y is not None else None
+                if origin_x is None or origin_y is None:
+                    return jsonify({'error': 'origin_x and origin_y are required when origin is custom'}), 400
+                if origin_x < 0 or origin_x > 500 or origin_y < 0 or origin_y > 285:
+                    return jsonify({'error': 'origin_x must be 0-500, origin_y must be 0-285'}), 400
+            except (ValueError, TypeError):
+                return jsonify({'error': 'origin_x and origin_y must be valid numbers'}), 400
 
         # Save SVG to temp file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.svg', delete=False, encoding='utf-8') as f:
@@ -243,7 +257,13 @@ def generate_vector_advanced():
 
         try:
             from gcode_service import generate_vector_gcode_advanced
-            gcode_content = generate_vector_gcode_advanced(svg_path=svg_path, jobs=jobs, origin=origin)
+            gcode_content = generate_vector_gcode_advanced(
+                svg_path=svg_path, 
+                jobs=jobs, 
+                origin=origin,
+                origin_x=origin_x,
+                origin_y=origin_y
+            )
             return jsonify({
                 'success': True,
                 'gcode': gcode_content,
