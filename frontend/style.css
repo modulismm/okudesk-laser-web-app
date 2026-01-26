@@ -50,7 +50,27 @@ h1, h2, h3 { margin: 0; font-weight: 600; }
 h3 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 10px; letter-spacing: 0.5px; }
 
 /* LEFT SIDEBAR */
-.sidebar-left { border-left: none; gap: 24px; }
+.sidebar-left { 
+    border-left: none; 
+    gap: 24px; 
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Custom scrollbar for sidebar */
+.sidebar-left::-webkit-scrollbar {
+    width: 6px;
+}
+.sidebar-left::-webkit-scrollbar-track {
+    background: transparent;
+}
+.sidebar-left::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+.sidebar-left::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
 
 .logo-area {
     margin-bottom: 10px;
