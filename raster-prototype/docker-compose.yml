@@ -1,0 +1,11 @@
+services:
+  okudesk-raster-proto:
+    build: .
+    container_name: okudesk-raster-proto
+    restart: unless-stopped
+    environment:
+      - PORT=8010
+      - DEBUG=0
+    ports:
+      - "8010:8010"
+

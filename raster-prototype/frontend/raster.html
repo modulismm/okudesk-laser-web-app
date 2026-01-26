@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Oku Desk Raster Prototype</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f17;
+        --panel: #121a27;
+        --text: #e8eefc;
+        --muted: #93a4c6;
+        --accent: #7aa2ff;
+        --border: rgba(255,255,255,.08);
+      }
+      body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: var(--bg); color: var(--text); }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 24px; }
+      .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+      h1 { font-size: 18px; margin: 0 0 12px; }
+      p { margin: 8px 0; color: var(--muted); }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .row { display: grid; grid-template-columns: 180px 1fr; gap: 10px; align-items: center; margin: 10px 0; }
+      label { color: var(--muted); font-size: 13px; }
+      input, select { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: rgba(255,255,255,.04); color: var(--text); }
+      input[type="file"] { padding: 8px; }
+      .actions { display: flex; gap: 10px; margin-top: 14px; }
+      button { cursor: pointer; border: 1px solid var(--border); background: rgba(122,162,255,.15); color: var(--text); padding: 10px 14px; border-radius: 10px; }
+      button:hover { border-color: rgba(122,162,255,.5); }
+      pre { white-space: pre-wrap; word-break: break-word; background: rgba(0,0,0,.25); border: 1px solid var(--border); padding: 12px; border-radius: 10px; color: #cfe0ff; }
+      .hint { font-size: 12px; color: var(--muted); }
+      .divider { height: 1px; background: var(--border); margin: 14px 0; }
+      @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Oku Desk — Raster prototype (isolated)</h1>
+        <p>
+          This page generates a raster <code>.gco</code> using <code>G1X...P&lt;hex&gt;</code> and embeds an <code>$MT</code> thumbnail.
+          Keep test images small at first.
+        </p>
+
+        <div class="grid">
+          <div>
+            <div class="row">
+              <label>Image</label>
+              <input id="file" type="file" accept="image/*" />
+            </div>
+
+            <div class="row">
+              <label>Origin</label>
+              <select id="origin">
+                <option value="bottom-left">Bottom-left</option>
+                <option value="bottom-right">Bottom-right</option>
+                <option value="top-left">Top-left</option>
+                <option value="top-right">Top-right</option>
+                <option value="center">Center</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Preset</label>
+              <select id="preset">
+                <option value="custom" selected>Custom</option>
+                <option value="photo_gray">Photo (grayscale) — like your cat</option>
+                <option value="photo_dither">Photo (dither) — safer tones</option>
+                <option value="logo_bw">Logo (BW) — crisp</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Speed (mm/min)</label>
+              <input id="speed" type="number" min="10" max="8000" value="1796" />
+            </div>
+
+            <div class="row">
+              <label>Power (%)</label>
+              <input id="power" type="number" min="1" max="100" value="100" />
+            </div>
+
+            <div class="row">
+              <label>Passes</label>
+              <input id="passes" type="number" min="1" max="200" value="1" />
+            </div>
+
+            <div class="row">
+              <label>mm / pixel</label>
+              <input id="mpp" type="number" min="0.01" step="0.01" value="0.10" />
+            </div>
+
+            <div class="row">
+              <label>Invert image</label>
+              <select id="invert">
+                <option value="false" selected>No (recommended)</option>
+                <option value="true">Yes</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Shading</label>
+              <select id="shading">
+                <option value="grayscale" selected>Grayscale (raw)</option>
+                <option value="dither">Dither (simulate tones)</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Gamma</label>
+              <input id="gamma" type="number" min="0.2" max="5" step="0.05" value="1.00" />
+            </div>
+
+            <div class="row">
+              <label>Levels (0 = off)</label>
+              <input id="levels" type="number" min="0" max="64" step="1" value="0" />
+            </div>
+
+            <div class="row">
+              <label>Thumbnail mode</label>
+              <select id="thumbMode">
+                <option value="match-input" selected>Match input (recommended)</option>
+                <option value="match-burn">Match burn-map</option>
+              </select>
+            </div>
+
+            <div class="row">
+              <label>Safe mode</label>
+              <select id="safeMode">
+                <option value="false" selected>Off</option>
+                <option value="true">On (smaller chunks + lower accel)</option>
+              </select>
+            </div>
+
+            <div class="actions">
+              <button id="generate">Generate .gco</button>
+            </div>
+            <p class="hint">
+              Suggested first test: a small black rectangle on white background, width 30–60mm, <code>mm/pixel=0.10</code>, <code>speed=1796</code>, <code>power=100</code>, <code>passes=1</code>.
+            </p>
+
+            <div class="divider"></div>
+            <p class="hint">
+              Need a known-good image? Download test patterns (PNG): gradient, steps, and fine lines/text.
+            </p>
+            <div class="actions">
+              <button id="downloadPatterns">Download test PNGs</button>
+            </div>
+          </div>
+
+          <div>
+            <p class="hint">Status</p>
+            <pre id="status">Waiting for image…</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      function setStatus(msg) { $("status").textContent = msg; }
+
+      function applyPreset(id) {
+        if (!id || id === "custom") return;
+        // Baselines tuned for OKU and stability, based on your successful grayscale cat run.
+        const presets = {
+          photo_gray: { speed: 1796, power: 40, mpp: 0.15, invert: false, shading: "grayscale", gamma: 1.0, levels: 0, safe: false },
+          photo_dither: { speed: 2000, power: 35, mpp: 0.18, invert: false, shading: "dither", gamma: 0.95, levels: 0, safe: true },
+          logo_bw: { speed: 2500, power: 60, mpp: 0.12, invert: false, shading: "dither", gamma: 1.0, levels: 2, safe: false },
+        };
+        const p = presets[id];
+        if (!p) return;
+        $("speed").value = String(p.speed);
+        $("power").value = String(p.power);
+        $("mpp").value = String(p.mpp.toFixed(2));
+        $("invert").value = p.invert ? "true" : "false";
+        $("shading").value = p.shading;
+        $("gamma").value = String(p.gamma.toFixed(2));
+        $("levels").value = String(p.levels);
+        $("safeMode").value = p.safe ? "true" : "false";
+        $("thumbMode").value = "match-input";
+      }
+
+      $("preset").addEventListener("change", () => applyPreset($("preset").value));
+
+      function downloadBlob(filename, blob) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      }
+
+      function canvasToBlob(canvas) {
+        return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      }
+
+      function mkCanvas(w, h) {
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, w, h);
+        return { c, ctx };
+      }
+
+      async function makeGradientPNG() {
+        const W = 900, H = 220;
+        const { c, ctx } = mkCanvas(W, H);
+        ctx.fillStyle = "#111";
+        ctx.font = "20px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText("OKU raster test: gradient (white → black)", 18, 34);
+
+        const y0 = 60, barH = 90;
+        const grad = ctx.createLinearGradient(18, 0, W - 18, 0);
+        grad.addColorStop(0, "#ffffff");
+        grad.addColorStop(1, "#000000");
+        ctx.fillStyle = grad;
+        ctx.fillRect(18, y0, W - 36, barH);
+
+        // 16-step band below
+        const steps = 16;
+        const y1 = y0 + barH + 20;
+        const bw = (W - 36) / steps;
+        for (let i = 0; i < steps; i++) {
+          const v = Math.round((i / (steps - 1)) * 255);
+          ctx.fillStyle = `rgb(${v},${v},${v})`;
+          ctx.fillRect(18 + i * bw, y1, bw + 1, 50);
+        }
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(18, y0, W - 36, barH);
+        ctx.strokeRect(18, y1, W - 36, 50);
+        return await canvasToBlob(c);
+      }
+
+      async function makeStepsPNG() {
+        const W = 900, H = 260;
+        const { c, ctx } = mkCanvas(W, H);
+        ctx.fillStyle = "#111";
+        ctx.font = "20px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText("OKU raster test: steps (0 → 100%)", 18, 34);
+
+        const labels = [0, 15, 30, 45, 60, 75, 90, 100];
+        const y0 = 60, boxH = 140;
+        const bw = (W - 36) / labels.length;
+        for (let i = 0; i < labels.length; i++) {
+          const pct = labels[i];
+          const v = Math.round(255 * (1 - pct / 100));
+          ctx.fillStyle = `rgb(${v},${v},${v})`;
+          ctx.fillRect(18 + i * bw, y0, bw + 1, boxH);
+          ctx.fillStyle = "#111";
+          ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.fillText(`${pct}%`, 18 + i * bw + 10, y0 + boxH + 28);
+        }
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(18, y0, W - 36, boxH);
+        return await canvasToBlob(c);
+      }
+
+      async function makeLinesPNG() {
+        const W = 900, H = 320;
+        const { c, ctx } = mkCanvas(W, H);
+        ctx.fillStyle = "#111";
+        ctx.font = "20px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText("OKU raster test: fine lines + text", 18, 34);
+
+        // line groups
+        const y0 = 70;
+        const groups = [
+          { spacing: 1, label: "1px spacing" },
+          { spacing: 2, label: "2px spacing" },
+          { spacing: 3, label: "3px spacing" },
+          { spacing: 4, label: "4px spacing" },
+        ];
+        ctx.strokeStyle = "#000";
+        for (let g = 0; g < groups.length; g++) {
+          const top = y0 + g * 55;
+          ctx.fillStyle = "#111";
+          ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.fillText(groups[g].label, 18, top + 14);
+          const startX = 160;
+          const endX = W - 18;
+          for (let x = startX; x < endX; x += groups[g].spacing) {
+            ctx.beginPath();
+            ctx.moveTo(x + 0.5, top);
+            ctx.lineTo(x + 0.5, top + 30);
+            ctx.stroke();
+          }
+          ctx.strokeRect(startX, top, endX - startX, 30);
+        }
+
+        // text sizes
+        ctx.fillStyle = "#000";
+        ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText("Text 16px: The quick brown fox 0123456789", 18, 300);
+        ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText("Text 12px: The quick brown fox 0123456789", 18, 278);
+        ctx.font = "10px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        ctx.fillText("Text 10px: The quick brown fox 0123456789", 18, 258);
+        return await canvasToBlob(c);
+      }
+
+      async function fileToDataURL(file) {
+        return await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onerror = () => reject(fr.error);
+          fr.onload = () => resolve(String(fr.result));
+          fr.readAsDataURL(file);
+        });
+      }
+
+      $("generate").addEventListener("click", async () => {
+        const f = $("file").files && $("file").files[0];
+        if (!f) return setStatus("Pick an image first.");
+
+        setStatus("Encoding image…");
+        const dataUrl = await fileToDataURL(f);
+
+        const payload = {
+          image_base64: dataUrl,
+          origin: $("origin").value,
+          speed: Number($("speed").value),
+          power: Number($("power").value),
+          passes: Number($("passes").value),
+          mm_per_pixel: Number($("mpp").value),
+          invert_image: $("invert").value === "true",
+          shading: $("shading").value,
+          gamma: Number($("gamma").value),
+          levels: Number($("levels").value),
+          thumbnail_mode: $("thumbMode").value,
+          thumbnail_contrast: 1.0,
+          safe_mode: $("safeMode").value === "true",
+        };
+
+        setStatus("Generating G-code…");
+        const res = await fetch("/api/generate-raster", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          return setStatus(`Error: ${json.error || res.statusText}`);
+        }
+
+        const gcode = json.gcode || "";
+        setStatus(`OK. Generated ${gcode.length} chars. Downloading…`);
+
+        const blob = new Blob([gcode], { type: "text/plain" });
+        downloadBlob("raster_prototype.gco", blob);
+        setStatus("Done. Copy to USB and test on the machine.");
+      });
+
+      $("downloadPatterns").addEventListener("click", async () => {
+        try {
+          setStatus("Generating test PNGs…");
+          const b1 = await makeGradientPNG();
+          const b2 = await makeStepsPNG();
+          const b3 = await makeLinesPNG();
+          downloadBlob("oku_test_gradient.png", b1);
+          downloadBlob("oku_test_steps.png", b2);
+          downloadBlob("oku_test_lines_text.png", b3);
+          setStatus("Downloaded: oku_test_gradient.png, oku_test_steps.png, oku_test_lines_text.png");
+        } catch (e) {
+          setStatus(`Error generating patterns: ${e?.message || e}`);
+        }
+      });
+    </script>
+  </body>
+</html>
+

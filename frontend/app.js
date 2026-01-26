@@ -1,7 +1,7 @@
 /**
  * Main Application Logic for OKU Desk Laser Interface
  * 
- * @version 0.2.1
+ * @version 0.2.2
  */
 
 // Initialize parsers
@@ -13,7 +13,10 @@ const appState = {
     svgData: null,
     scale: 1,
     svgElement: null,
-    originMode: 'bottom-left'
+    originMode: 'bottom-left',
+    mode: 'vector',
+    rasterEnabled: false,
+    rasterUrl: '/raster'
 };
 
 // Based on the Oku Desk material guide you provided (speed mm/min, power %, passes)
@@ -86,6 +89,7 @@ let elements = {};
 function init() {
     // Cache DOM elements
     elements = {
+        appContainer: document.querySelector('.app-container'),
         dropZone: document.getElementById('dropZone'),
         fileInput: document.getElementById('fileInput'),
         jobsContainer: document.getElementById('jobsContainer'),
@@ -103,7 +107,12 @@ function init() {
         materialPreset: document.getElementById('materialPreset'),
         materialMode: document.getElementById('materialMode'),
         applyMaterialBtn: document.getElementById('applyMaterialBtn'),
-        materialHint: document.getElementById('materialHint')
+        materialHint: document.getElementById('materialHint'),
+        modeVectorBtn: document.getElementById('modeVectorBtn'),
+        modeRasterBtn: document.getElementById('modeRasterBtn'),
+        rasterPanel: document.getElementById('rasterPanel'),
+        rasterFrame: document.getElementById('rasterFrame'),
+        openRasterTab: document.getElementById('openRasterTab')
     };
 
     // Setup event listeners
@@ -111,6 +120,7 @@ function init() {
     setupFileInput();
     setupExport();
     setupControls();
+    setupModeSwitch();
     setupMaterialPresets();
     setupProjectLinks().finally(() => {
         maybeShowFirstRunModal();
@@ -136,8 +146,85 @@ async function setupProjectLinks() {
         const cfg = await res.json();
         if (cfg && cfg.donate_url && link) link.href = cfg.donate_url;
         if (cfg && cfg.gitlab_url && gitlab) gitlab.href = cfg.gitlab_url;
+        if (cfg && typeof cfg.raster_enabled !== 'undefined') {
+            appState.rasterEnabled = !!cfg.raster_enabled;
+            if (cfg.raster_url) appState.rasterUrl = String(cfg.raster_url);
+            updateRasterAvailability();
+        }
     } catch {
         // ignore (static mode)
+    }
+}
+
+function setupModeSwitch() {
+    const { modeVectorBtn, modeRasterBtn } = elements;
+    if (!modeVectorBtn || !modeRasterBtn) return;
+
+    modeVectorBtn.addEventListener('click', () => setAppMode('vector'));
+    modeRasterBtn.addEventListener('click', () => setAppMode('raster'));
+
+    // Default mode
+    setAppMode('vector');
+    updateRasterAvailability();
+
+    // Optional deep link: /#raster
+    if (location.hash === '#raster') {
+        setAppMode('raster');
+    }
+}
+
+function updateRasterAvailability() {
+    const { modeRasterBtn, openRasterTab } = elements;
+    if (modeRasterBtn) {
+        modeRasterBtn.disabled = !appState.rasterEnabled;
+        modeRasterBtn.title = appState.rasterEnabled ? 'Raster engraving' : 'Raster disabled on server';
+    }
+    if (openRasterTab) {
+        openRasterTab.href = appState.rasterUrl || '/raster';
+    }
+    // If raster was open but server says disabled, bounce back.
+    if (!appState.rasterEnabled && appState.mode === 'raster') {
+        setAppMode('vector');
+    }
+}
+
+function setAppMode(mode) {
+    const { appContainer, modeVectorBtn, modeRasterBtn, rasterPanel, rasterFrame, openRasterTab } = elements;
+    if (!appContainer) return;
+
+    if (mode === 'raster' && !appState.rasterEnabled) {
+        showError('Raster is disabled on this server. Set ENABLE_RASTER=1 and restart.');
+        mode = 'vector';
+    }
+
+    appState.mode = mode;
+    appContainer.classList.toggle('mode-raster', mode === 'raster');
+
+    if (modeVectorBtn) {
+        const active = mode === 'vector';
+        modeVectorBtn.classList.toggle('active', active);
+        modeVectorBtn.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+    if (modeRasterBtn) {
+        const active = mode === 'raster';
+        modeRasterBtn.classList.toggle('active', active);
+        modeRasterBtn.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+
+    if (openRasterTab) {
+        openRasterTab.style.display = mode === 'raster' ? 'block' : 'none';
+    }
+
+    if (rasterPanel) {
+        rasterPanel.style.display = mode === 'raster' ? 'flex' : 'none';
+    }
+
+    // Lazy-load iframe only when needed
+    if (mode === 'raster' && rasterFrame) {
+        const desired = appState.rasterUrl || '/raster';
+        if (!rasterFrame.src || rasterFrame.src.endsWith('about:blank')) {
+            rasterFrame.src = desired;
+        }
     }
 }
 

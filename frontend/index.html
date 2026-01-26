@@ -19,6 +19,11 @@
                 <span class="version">v0.2 BETA</span>
             </div>
 
+            <div class="mode-switch" role="tablist" aria-label="Mode">
+                <button id="modeVectorBtn" class="mode-btn active" type="button" aria-selected="true">Vector</button>
+                <button id="modeRasterBtn" class="mode-btn" type="button" aria-selected="false" disabled title="Raster disabled on server">Raster</button>
+            </div>
+
             <div class="control-group">
                 <h3>Global Settings</h3>
                 
@@ -93,7 +98,7 @@
                 </div>
             </div>
 
-            <div class="file-drop-area" id="dropZone">
+            <div class="file-drop-area vector-only" id="dropZone">
                 <div class="drop-content">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                     <span>Import SVG</span>
@@ -101,7 +106,7 @@
                 <input type="file" id="fileInput" accept=".svg" hidden>
             </div>
 
-            <div class="stats-panel" id="statsPanel" style="display:none;">
+            <div class="stats-panel vector-only" id="statsPanel" style="display:none;">
                 <h3>Job Stats</h3>
                 <div class="stat-row">
                     <span>Dimensions:</span>
@@ -114,9 +119,10 @@
             </div>
 
             <div class="action-area">
-                <button id="exportBtn" class="btn-primary" disabled>
-                    Generate G-Code
-                </button>
+                <button id="exportBtn" class="btn-primary vector-only" disabled>Generate G-Code</button>
+                <a id="openRasterTab" class="btn-secondary raster-only" href="/raster" target="_blank" rel="noopener noreferrer" style="display:none;">
+                    Open Raster in new tab
+                </a>
                 <div class="support-area">
                     <a id="gitlabLink" class="donate-link" href="#" target="_blank" rel="noopener noreferrer">
                         GitLab
@@ -139,6 +145,9 @@
                     <!-- Origin Marker -->
                     <div class="origin-marker"></div>
                 </div>
+            </div>
+            <div id="rasterPanel" class="raster-panel" style="display:none;">
+                <iframe id="rasterFrame" title="Raster generator" src="about:blank"></iframe>
             </div>
             <div class="workspace-controls">
                 <button id="fitViewBtn" title="Fit to View" aria-label="Fit to View">⤢</button>
@@ -166,24 +175,24 @@
             </div>
             <div class="modal-body">
                 <p>
-                    Cette interface existe parce que le workflow macOS original pour l’Oku Desk a été abandonné.
-                    Des usagers se sont retrouvés sans outil fiable, maintenu, ni support adéquat.
+                    This interface exists because the original macOS workflow for Oku Desk was abandoned.
+                    Many users were left without a reliable, maintained toolchain.
                 </p>
                 <ul>
-                    <li><strong>Abandon du logiciel macOS</strong> (NomadTech) et absence de maintenance à long terme.</li>
-                    <li><strong>Manque de soutien aux usagers</strong> et frustration face à un outil “boîte noire”.</li>
-                    <li><strong>Manque de respect</strong> quand les utilisateurs deviennent dépendants d’un workflow qui disparaît.</li>
+                    <li><strong>NomadTech discontinued the macOS software</strong> (and long-term maintenance/support).</li>
+                    <li><strong>Lack of support</strong> left users stuck with a “black box” workflow.</li>
+                    <li><strong>Lack of respect</strong> when users become dependent on a workflow that disappears.</li>
                 </ul>
                 <p>
-                    Notre objectif: un workflow transparent, reproductible, documenté, et maintenu par la communauté.
+                    Our goal: a transparent, reproducible, documented workflow maintained by the community.
                 </p>
                 <p>
-                    <strong>Crédits / inspirations:</strong> on reconnaît explicitement les projets dont nous nous sommes inspirés,
-                    notamment les extensions Inkscape NomadTech (GPL) et les projets amont cités dans leurs en-têtes
+                    <strong>Credits / inspirations:</strong> we explicitly acknowledge the projects we learned from,
+                    especially NomadTech’s Inkscape extensions (GPL) and upstream projects referenced in their headers
                     (Nick Drobchenko, hugomatic, Aaron Spike, TurnkeyTyranny, etc.).
                 </p>
                 <p class="modal-note">
-                    Licence: <strong>GPL-3.0-or-later</strong> (choisie pour compatibilité avec le code GPLv2-or-later de NomadTech et les projets amont).
+                    License: <strong>GPL-3.0-or-later</strong> (chosen for compatibility with NomadTech’s GPLv2-or-later codebase and upstream).
                 </p>
             </div>
             <div class="modal-actions">

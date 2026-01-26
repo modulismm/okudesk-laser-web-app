@@ -12,6 +12,7 @@ including the required `$M` metadata + **thumbnail preview** on the machine.
 - Reorder job colors (execution order)
 - Origin (0,0) selection (corners + center)
 - Material presets (cut / engrave)
+- Raster engraving (PNG/JPG → `.gco`) with presets + safe mode
 - Output validated on OKU Desk hardware
 
 ## Run locally (recommended dev workflow)
@@ -31,6 +32,21 @@ The UI reads `/api/config`. On your server you can set:
 
 - `DONATE_URL` (example: `https://buymeacoffee.com/bootlessbear`)
 - `GITLAB_URL` (example: `https://gitlab.com/Bootlessbear/okudesk-laser-web-app`)
+
+## Raster mode (in the same UI)
+
+Raster is **enabled by default** and can be disabled server-side:
+
+- **Enabled by default**: no configuration needed
+- **Disable**: set `ENABLE_RASTER=0` and restart the backend/container (Raster button will be disabled in the UI)
+
+How to access:
+
+- In the main UI, use the **Vector / Raster** switch (Raster only appears if enabled)
+- Direct URL: `/raster`
+- Deep link: `/#raster`
+
+Technical details: see `docs/RASTER.md`.
 
 ## License
 
