@@ -756,21 +756,25 @@ function generateAndDownload() {
     try {
         const travelSpeed = parseInt(elements.travelSpeed.value) || 5000;
 
-        // Prefer backend generation when hosted (supports preview + robust SVG handling)
-        // Falls back to client generator if backend isn't available.
-        generateViaBackendOrFallback(travelSpeed);
-        
+        // G-code is always generated server-side: the client-side generator
+        // (gcode-generator.js) does not apply <g transform="..."> and is
+        // missing several path commands (A/Q/S/T), so it produces wrong
+        // geometry on real-world SVGs. There is intentionally no client-side
+        // fallback for the actual cut file - if the backend fails, we must
+        // surface that clearly rather than silently downloading wrong G-code.
+        generateViaBackend(travelSpeed);
+
     } catch (err) {
         console.error('Error generating G-code:', err);
         showError('Error generating G-code: ' + err.message);
     }
 }
 
-async function generateViaBackendOrFallback(travelSpeed) {
+async function generateViaBackend(travelSpeed) {
     const svgString = appState.svgData?.svgString;
     if (!svgString) throw new Error('Missing SVG source');
 
-    // Try backend advanced endpoint (multi-jobs, order, origin)
+    let data;
     try {
         const payload = {
             svg_content: svgString,
@@ -787,25 +791,23 @@ async function generateViaBackendOrFallback(travelSpeed) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
-        const data = await res.json();
+        data = await res.json();
         if (res.ok && data && data.success && data.gcode) {
             downloadText(data.gcode, data.filename || 'oku-job.gco');
             return;
         }
         throw new Error(data?.error || data?.details || 'Backend generation failed');
     } catch (e) {
-        console.warn('Backend not available, falling back to client generator:', e?.message || e);
+        // No client-side fallback here on purpose (see comment in
+        // generateAndDownload()) - a silently-downloaded wrong G-code file
+        // can physically destroy material. Surface the failure instead.
+        const reason = e?.message || String(e);
+        showError(
+            'G-code generation failed: the backend could not generate a file for this SVG (' +
+            reason +
+            '). Nothing was downloaded. Check that the backend server is running and that the SVG is valid.'
+        );
     }
-
-    // Fallback: client generator (may not include thumbnail)
-    const gcode = gcodeGen.generate(
-        appState.svgData.jobs,
-        appState.svgData.dimensions.width,
-        appState.svgData.dimensions.height,
-        travelSpeed,
-        appState.originMode
-    );
-    downloadText(gcode, 'oku-job.gco');
 }
 
 function downloadText(text, filename) {
