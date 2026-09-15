@@ -49,6 +49,15 @@ class GCodeGenerator {
      * @returns {string} Complete G-code string
      */
     generate(jobs, svgW, svgH, globalTravelSpeed, originMode = 'bottom-left') {
+        // WARNING: this method is NOT used to produce the G-code that gets
+        // downloaded/sent to the laser (that is generated server-side, see
+        // generateViaBackend() in app.js and gcode_service.py). It lacks
+        // <g transform="..."> handling (extractPaths()'s parentTransform is
+        // never applied) and several path commands (A/Q/S/T), so it will
+        // silently produce WRONG geometry on real-world SVGs (e.g. anything
+        // exported from Inkscape, which wraps content in transformed groups).
+        // Do not wire this back into the production download path without
+        // first reaching feature parity with the backend generator.
         if (!jobs || !Array.isArray(jobs)) {
             throw new Error('Invalid jobs parameter');
         }
@@ -269,7 +278,14 @@ class GCodeGenerator {
 
                 // TODO: Add S, Q, T, A (smooth curves, quadratic, arcs)
                 default:
-                    console.warn(`Unsupported path command: ${typeUpper}`);
+                    // NOTE: this command is silently skipped AND (cx, cy) is not
+                    // advanced, so every subsequent point in this path is wrong too.
+                    // This function is only used for the time ESTIMATE (see
+                    // estimateTime()/updateStats()), not for production G-code
+                    // download (see generateViaBackend() in app.js) - so this only
+                    // makes the on-screen time estimate inaccurate, it does not
+                    // affect the actual cut. Kept non-throwing for that reason.
+                    console.warn(`Unsupported path command: ${typeUpper} - time estimate will be inaccurate for this path`);
             }
         });
 
@@ -524,33 +540,40 @@ class GCodeGenerator {
 
         enabledJobs.forEach(job => {
             if (!job.paths) return;
-            
+
+            // Accumulate this job's own contribution in a local variable, then
+            // apply its passes multiplier and add it to the running total.
+            // (Previously `this.estimatedTime *= passes` multiplied the SHARED
+            // running total, compounding every prior job's time as well.)
+            const before = this.estimatedTime;
+            this.estimatedTime = 0;
+
             job.paths.forEach(p => {
                 if (!p || !p.d) return;
                 try {
                     const points = this.pathToPoints(p.d);
                     const speed = job.speed || 1000;
-                    
+
                     let last = null;
                     points.forEach(pt => {
                         const mx = pt.x;
                         const my = svgH - pt.y;
-                        
+
                         if (last && pt.cmd === 'L') {
                             this.addTime(last, { x: mx, y: my }, speed);
                         } else if (last && pt.cmd === 'M') {
                             this.addTime(last, { x: mx, y: my }, this.RAPID_SPEED);
                         }
-                        
+
                         last = { x: mx, y: my };
                     });
                 } catch (err) {
                     console.warn('Error estimating time for path:', err);
                 }
             });
-            
-            // Multiply by passes
-            this.estimatedTime *= (job.passes || 1);
+
+            const jobTime = this.estimatedTime;
+            this.estimatedTime = before + jobTime * (job.passes || 1);
         });
 
         return this.estimatedTime;

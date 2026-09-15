@@ -39,14 +39,23 @@ class SVGParser {
         // Get dimensions
         const dimensions = this.getDimensions(svg);
 
-        // Extract paths recursively
-        const paths = this.extractPaths(svg);
+        // Extract paths recursively. `stats` records shapes that were found but
+        // could not be assigned a colour, so the UI can explain a empty result.
+        const stats = { uncoloured: 0, classStyled: 0 };
+        const paths = this.extractPaths(svg, null, stats);
 
         return {
             element: svg,
             svgString: text,
             dimensions: dimensions,
-            jobs: this.groupPathsByColor(paths)
+            jobs: this.groupPathsByColor(paths),
+            stats: {
+                uncoloured: stats.uncoloured,
+                classStyled: stats.classStyled,
+                // Neither parser implements a CSS cascade, so a file that styles
+                // its shapes through a <style> block resolves to no colours.
+                hasStyleBlock: Boolean(svg.querySelector('style'))
+            }
         };
     }
 
@@ -114,7 +123,7 @@ class SVGParser {
      * @param {Object} parentTransform - Accumulated transform (for future use)
      * @returns {Array} Array of path objects with 'd' and 'color'
      */
-    extractPaths(element, parentTransform = null) {
+    extractPaths(element, parentTransform = null, stats = null) {
         if (!element || !element.children) return [];
 
         const paths = [];
@@ -123,23 +132,30 @@ class SVGParser {
         children.forEach(child => {
             const tag = child.tagName.toLowerCase();
 
-            if (tag === 'g') {
-                // Recursively process groups
-                // TODO: Apply transform from <g transform="...">
-                paths.push(...this.extractPaths(child, parentTransform));
-            } else if (['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon'].includes(tag)) {
+            // Definitions are not drawings. A <clipPath> or <defs> shape is
+            // never rendered, so cutting it would burn invisible geometry.
+            if (SVGParser.NON_RENDERED_CONTAINERS.includes(tag)) return;
+
+            if (SVGParser.SHAPE_TAGS.includes(tag)) {
                 const color = this.getStrokeColor(child);
-                if (color) {
-                    const d = this.elementToPathData(child);
-                    if (d) {
-                        paths.push({
-                            d: d,
-                            color: color,
-                            originalElement: child
-                        });
-                    }
+                const d = this.elementToPathData(child);
+                if (color && d) {
+                    paths.push({ d: d, color: color, originalElement: child });
+                } else if (d && stats) {
+                    // A drawable shape with no resolvable colour cannot be
+                    // assigned to a job. Counted so the UI can say why rather
+                    // than reporting a bare "no paths found".
+                    stats.uncoloured += 1;
+                    if (child.getAttribute('class')) stats.classStyled += 1;
                 }
+                return;
             }
+
+            // Recurse through every other container: <g>, <a>, <switch>,
+            // nested <svg>, and anything else an editor emits. Limiting this to
+            // <g> is why shapes in other wrappers were invisible, while the
+            // backend walked the whole tree and saw them.
+            paths.push(...this.extractPaths(child, parentTransform, stats));
         });
 
         return paths;
@@ -183,29 +199,55 @@ class SVGParser {
      * @returns {string|null} Normalized hex color or null
      */
     getStrokeColor(el) {
-        // Check direct attribute
-        let stroke = el.getAttribute('stroke');
-        
-        // Check style attribute
-        if (!stroke || stroke === 'none') {
+        // Mirrors gcode_service._element_color(): stroke wins, fill is the
+        // fallback, and both resolve up the tree. Keep the two in step - a
+        // colour this reports but the backend cannot resolve produces a job
+        // that silently cuts nothing.
+        const stroke = this.inheritedPaint(el, 'stroke');
+        if (stroke) return this.normalizeColor(stroke);
+
+        const fill = this.inheritedPaint(el, 'fill');
+        if (fill) return this.normalizeColor(fill);
+
+        return null;
+    }
+
+    /**
+     * An element's own stroke/fill, from the attribute or its style attribute.
+     * @param {Element} el
+     * @param {string} prop - 'stroke' or 'fill'
+     * @returns {string|null}
+     */
+    ownPaint(el, prop) {
+        let value = el.getAttribute(prop);
+        if (!value || value === 'none') {
             const style = el.getAttribute('style') || '';
-            const match = style.match(/stroke:\s*([^;]+)/);
-            if (match) {
-                stroke = match[1].trim();
-            }
+            const match = style.match(new RegExp('(?:^|;)\\s*' + prop + '\\s*:\\s*([^;]+)'));
+            value = match ? match[1].trim() : null;
         }
+        if (!value || value === 'none') return null;
+        return value;
+    }
 
-        // If still no stroke, check fill (some users use fill for engraving)
-        if (!stroke || stroke === 'none') {
-            const fill = el.getAttribute('fill');
-            if (fill && fill !== 'none') {
-                stroke = fill; // Use fill as fallback
-            }
+    /**
+     * Resolve stroke/fill the way SVG does - walking up to the nearest ancestor
+     * that sets it. Editors routinely put stroke on a parent <g> and leave the
+     * shapes bare; reading only the element itself finds no colour at all.
+     *
+     * @param {Element} el
+     * @param {string} prop - 'stroke' or 'fill'
+     * @returns {string|null}
+     */
+    inheritedPaint(el, prop) {
+        let node = el;
+        let depth = 0;
+        while (node && depth < 64) {
+            const value = this.ownPaint(node, prop);
+            if (value) return value;
+            node = node.parentElement;
+            depth += 1;
         }
-
-        if (!stroke || stroke === 'none') return null;
-
-        return this.normalizeColor(stroke);
+        return null;
     }
 
     /**
@@ -353,3 +395,9 @@ class SVGParser {
         return path;
     }
 }
+
+SVGParser.SHAPE_TAGS = ['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon'];
+SVGParser.NON_RENDERED_CONTAINERS = [
+    'defs', 'clippath', 'mask', 'symbol', 'marker', 'pattern',
+    'metadata', 'title', 'desc', 'style', 'script'
+];

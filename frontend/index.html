@@ -5,10 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OKU Desk Laser Controller</title>
     <link rel="stylesheet" href="style.css">
-    <!-- Google Fonts for a techy look -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
     <div class="app-container">
@@ -20,15 +16,15 @@
             </div>
 
             <div class="mode-switch" role="tablist" aria-label="Mode">
-                <button id="modeVectorBtn" class="mode-btn active" type="button" aria-selected="true">Vector</button>
-                <button id="modeRasterBtn" class="mode-btn" type="button" aria-selected="false" disabled title="Raster disabled on server">Raster</button>
+                <button id="modeVectorBtn" class="mode-btn active" type="button" role="tab" aria-selected="true">Vector</button>
+                <button id="modeRasterBtn" class="mode-btn" type="button" role="tab" aria-selected="false" disabled title="Raster disabled on server">Raster</button>
             </div>
 
             <div class="control-group">
                 <h3>Global Settings</h3>
                 
                 <div class="setting-item">
-                    <label>Travel Speed</label>
+                    <label for="travelSpeed">Travel Speed</label>
                     <div class="input-with-unit">
                         <input type="number" id="travelSpeed" value="5000" min="100" max="10000">
                         <span>mm/min</span>
@@ -70,10 +66,12 @@
                     </div>
                     <div id="customOriginInputs" class="custom-origin-inputs" style="display:none; margin-top: 8px;">
                         <div class="input-with-unit" style="margin-bottom: 6px;">
+                            <label for="originX" class="visually-hidden">Custom origin X</label>
                             <input type="number" id="originX" value="0" min="0" max="500" step="0.1" placeholder="X">
                             <span>mm</span>
                         </div>
                         <div class="input-with-unit">
+                            <label for="originY" class="visually-hidden">Custom origin Y</label>
                             <input type="number" id="originY" value="0" min="0" max="285" step="0.1" placeholder="Y">
                             <span>mm</span>
                         </div>
@@ -100,9 +98,9 @@
                             <option value="cork">Cork</option>
                             <option value="opaque_acrylic">Opaque acrylic</option>
                         </select>
-                        <select id="materialMode" class="select">
-                            <option value="cut" selected>Cut</option>
-                            <option value="engrave">Engrave</option>
+                        <select id="materialMode" class="select" aria-label="Operation">
+                            <option value="cut" selected>Cut through</option>
+                            <option value="engrave">Score outline</option>
                         </select>
                     </div>
                     <div class="material-actions">
@@ -120,6 +118,12 @@
                 <input type="file" id="fileInput" accept=".svg" hidden>
             </div>
 
+            <div class="loaded-file vector-only" id="loadedFile" hidden>
+                <span class="loaded-file-name" id="loadedFileName" title="">—</span>
+                <button id="removeFileBtn" class="loaded-file-remove" type="button"
+                        aria-label="Remove loaded file" title="Remove file">✕</button>
+            </div>
+
             <div class="stats-panel vector-only" id="statsPanel" style="display:none;">
                 <h3>Job Stats</h3>
                 <div class="stat-row">
@@ -130,9 +134,18 @@
                     <span>Est. Time:</span>
                     <span id="statTime" class="highlight-time">—</span>
                 </div>
+                <div class="stat-row toolpath-stat" id="statCutRow" style="display:none;">
+                    <span>Cut distance:</span>
+                    <span id="statCut">—</span>
+                </div>
+                <div class="stat-row toolpath-stat" id="statRapidRow" style="display:none;">
+                    <span>Travel distance:</span>
+                    <span id="statRapid">—</span>
+                </div>
             </div>
 
             <div class="action-area">
+                <button id="previewBtn" class="btn-secondary vector-only" disabled>Preview Toolpath</button>
                 <button id="exportBtn" class="btn-primary vector-only" disabled>Generate G-Code</button>
                 <a id="openRasterTab" class="btn-secondary raster-only" href="/raster" target="_blank" rel="noopener noreferrer" style="display:none;">
                     Open Raster in new tab
@@ -156,6 +169,8 @@
                     <div class="grid-lines"></div>
                     <!-- The SVG Content Layer -->
                     <div id="svgLayer" class="svg-layer"></div>
+                    <!-- Toolpath Overlay (rendered from the emitted G-code) -->
+                    <div id="toolpathLayer" class="toolpath-layer"></div>
                     <!-- Origin Marker -->
                     <div class="origin-marker"></div>
                 </div>
@@ -163,9 +178,29 @@
             <div id="rasterPanel" class="raster-panel" style="display:none;">
                 <iframe id="rasterFrame" title="Raster generator" src="about:blank"></iframe>
             </div>
+            <div id="errorBanner" class="error-banner" role="alert" aria-live="assertive" hidden>
+                <span class="error-banner-icon" aria-hidden="true">⚠</span>
+                <span id="errorBannerText" class="error-banner-text"></span>
+                <button id="errorBannerClose" class="error-banner-close" aria-label="Dismiss error">✕</button>
+            </div>
+            <div id="loadingOverlay" class="loading-overlay" hidden>
+                <div class="spinner" aria-hidden="true"></div>
+                <span id="loadingText" class="loading-text">Working…</span>
+            </div>
+            <div id="dragHint" class="drag-hint" hidden>Drag the job to place it</div>
             <div class="workspace-controls">
+                <button id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">−</button>
+                <span id="zoomLevel" class="zoom-level" aria-live="polite">100%</span>
+                <button id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
                 <button id="fitViewBtn" title="Fit to View" aria-label="Fit to View">⤢</button>
                 <button id="centerJobBtn" title="Center Job" aria-label="Center Job">⌖</button>
+                <span class="control-divider" role="separator"></span>
+                <button id="toggleRapidsBtn" class="toggle-btn" title="Show travel moves"
+                        aria-label="Show travel moves" aria-pressed="true" disabled>Travel</button>
+                <button id="toggleOrderBtn" class="toggle-btn" title="Colour cuts by order"
+                        aria-label="Colour cuts by order" aria-pressed="true" disabled>Order</button>
+                <button id="clearPreviewBtn" title="Clear toolpath preview"
+                        aria-label="Clear toolpath preview" disabled>✕</button>
             </div>
         </main>
 
@@ -218,6 +253,7 @@
 
     <script src="svg-parser.js"></script>
     <script src="gcode-generator.js"></script>
+    <script src="toolpath-preview.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

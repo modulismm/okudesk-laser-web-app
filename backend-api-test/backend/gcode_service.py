@@ -50,6 +50,41 @@ MAX_RASTER_PIXELS_PER_LINE = 80
 RASTER_ZERO_MOVE_THRESHOLD_MM = 0.005
 RASTER_PROTO_VERSION = "0.2.0"
 
+# --- Toolpath ordering (path-order optimization) ---
+# Above this many paths in a single job/color batch, skip the 2-opt
+# improvement pass entirely (greedy nearest-neighbour still runs). Bounds
+# worst-case request latency on pathological files with huge path counts.
+# Measured on this codebase's pure-Python 2-opt: ~1-2s at 500 paths but
+# growing sharply past that (multiple full O(n^2) sweeps), so 500 -- not the
+# 2000 suggested as a starting point in the task description -- is what
+# actually keeps a single generate-request's added latency in a
+# "noticeable but not a timeout risk" range.
+TWO_OPT_MAX_PATHS = 500
+# Bounded number of full O(n^2) improvement sweeps. Kept modest (rather than
+# running to full convergence) because each sweep is O(n^2) pure-Python
+# distance comparisons: at n=800 a single sweep is already ~1-2s, so an
+# unbounded number of sweeps on a large, still-improvable batch could turn
+# into many seconds of request latency. Greedy nearest-neighbour (run
+# unconditionally, uncapped) already gets most of the win; 2-opt here is a
+# bounded "polish" pass, not a full local-optimum search.
+TWO_OPT_MAX_PASSES = 4
+# Hard cap on total accepted 2-opt swaps across all sweeps, in case of a
+# pathological case that keeps finding (tiny) improvements.
+TWO_OPT_MAX_SWAPS = 1000
+
+# --- Adaptive Bezier flattening (Task 3) ---
+# Target chord-error tolerance, in mm, for flattening cubic/quadratic Bezier
+# curves. Comfortably below the machine's stated 0.1mm accuracy.
+CURVE_TOLERANCE_MM = 0.05
+_MIN_BEZIER_SEGS = 2
+_MAX_BEZIER_SEGS = 256
+
+# --- Path simplification (Task 4) ---
+# Douglas-Peucker tolerance, in mm (points are simplified after the
+# user-unit -> mm scale has already been applied), well under machine
+# accuracy so simplification cannot visibly change cut geometry.
+SIMPLIFY_TOLERANCE_MM = 0.02
+
 
 @dataclass(frozen=True)
 class Pt:
@@ -304,15 +339,29 @@ def _circle_ellipse_to_path_d(el) -> Optional[str]:
     return d
 
 
+# Containers whose contents are definitions, not drawings. A <clipPath> or
+# <defs> shape is never rendered on its own, so cutting it would burn geometry
+# the user cannot see in any viewer.
+_NON_RENDERED_CONTAINERS = frozenset({
+    "defs", "clippath", "mask", "symbol", "marker", "pattern",
+    "metadata", "title", "desc", "style", "script",
+})
+
+
 def _extract_drawables(svg_root) -> List[Tuple[object, Mat]]:
     """
     Walk the SVG tree and return drawable elements with their accumulated transform matrix.
+
+    Recurses through every container (<g>, <a>, <switch>, nested <svg>, ...),
+    skipping only those whose contents are definitions rather than drawings.
     """
     out: List[Tuple[object, Mat]] = []
 
     def walk(el, parent_mat: Mat):
         this_mat = parent_mat.mul(_parse_transform(el.get("transform")))
         lname = _local_name(el)
+        if lname in _NON_RENDERED_CONTAINERS:
+            return
         if lname in ("path", "rect", "circle", "ellipse", "line", "polyline", "polygon"):
             out.append((el, this_mat))
         for child in list(el):
@@ -353,6 +402,42 @@ def _bezier_point(p0, p1, p2, p3, t: float) -> Tuple[float, float]:
     x = mt3 * p0[0] + 3 * mt2 * t * p1[0] + 3 * mt * t2 * p2[0] + t3 * p3[0]
     y = mt3 * p0[1] + 3 * mt2 * t * p1[1] + 3 * mt * t2 * p2[1] + t3 * p3[1]
     return x, y
+
+
+def _dist2(a: Tuple[float, float], b: Tuple[float, float]) -> float:
+    return math.hypot(b[0] - a[0], b[1] - a[1])
+
+
+def _cubic_seg_count(p0, p1, p2, p3, tol: float) -> int:
+    """
+    Estimate the number of line segments needed to flatten a cubic Bezier to
+    within `tol` (chord error), from the control-polygon length vs. how much
+    the polygon "bends" away from the straight chord.
+
+    Heuristic (classic curve-flattening estimate): segs ~ sqrt(L * bend / (8 * tol)),
+    where L is the control-polygon length and `bend` is how much longer the
+    polygon is than the direct chord (a proxy for curvature/deviation). A
+    straight or near-straight curve needs very few segments; a long, sharply
+    bent one needs more.
+    """
+    poly_len = _dist2(p0, p1) + _dist2(p1, p2) + _dist2(p2, p3)
+    if poly_len <= 1e-9:
+        return _MIN_BEZIER_SEGS
+    chord_len = _dist2(p0, p3)
+    bend = max(0.0, poly_len - chord_len)
+    segs = int(math.ceil(math.sqrt((poly_len * bend) / (8.0 * max(tol, 1e-9))))) + 1
+    return max(_MIN_BEZIER_SEGS, min(_MAX_BEZIER_SEGS, segs))
+
+
+def _quad_seg_count(p0, p1, p2, tol: float) -> int:
+    """Same heuristic as `_cubic_seg_count`, for a quadratic Bezier's 3-point hull."""
+    poly_len = _dist2(p0, p1) + _dist2(p1, p2)
+    if poly_len <= 1e-9:
+        return _MIN_BEZIER_SEGS
+    chord_len = _dist2(p0, p2)
+    bend = max(0.0, poly_len - chord_len)
+    segs = int(math.ceil(math.sqrt((poly_len * bend) / (8.0 * max(tol, 1e-9))))) + 1
+    return max(_MIN_BEZIER_SEGS, min(_MAX_BEZIER_SEGS, segs))
 
 
 def _vector_angle(ux: float, uy: float, vx: float, vy: float) -> float:
@@ -455,15 +540,57 @@ def _arc_to_points(
     return pts
 
 
-def _path_to_points(d: str) -> List[Pt]:
+def _quad_bezier_point(p0, p1, p2, t: float) -> Tuple[float, float]:
+    mt = 1.0 - t
+    x = mt * mt * p0[0] + 2 * mt * t * p1[0] + t * t * p2[0]
+    y = mt * mt * p0[1] + 2 * mt * t * p1[1] + t * t * p2[1]
+    return x, y
+
+
+def _path_to_points(d: str, scale_x: float = 1.0, scale_y: float = 1.0) -> List[Pt]:
     """
     Convert SVG path 'd' to a list of Pt(x,y,cmd) in *user units* (pre-scaling).
-    Supports: M, L, H, V, Z, C (cubic bezier approximated), A (elliptical arc approximated).
+    Supports: M, L, H, V, Z, C, S (cubic bezier + smooth variant), Q, T (quadratic
+    bezier + smooth variant), A (elliptical arc), all approximated by line segments.
+
+    An unrecognized command raises ValueError rather than being silently dropped,
+    since silently ignoring a command both drops geometry AND fails to advance the
+    current point, displacing every subsequent command in the path.
+
+    `scale_x`/`scale_y` are the caller's user-unit -> mm scale factors (the same
+    ones later multiplied into the returned points' coordinates). They are used
+    ONLY to convert `CURVE_TOLERANCE_MM` (a physical mm tolerance) into an
+    equivalent tolerance in this function's *user-unit* coordinate space, so
+    Bezier flattening actually targets ~CURVE_TOLERANCE_MM of chord error on
+    the machine, not on an arbitrary pre-scale unit. We divide by
+    max(scale_x, scale_y) (not an average) so that on non-uniform scale the
+    tighter (larger-scale) axis is still guaranteed within tolerance -- this
+    can only make curves on the other axis *more* accurate than strictly
+    necessary, never less.
+
+    Caveat: if this path is later run through an additional transform matrix
+    (a `mat` from a containing <g transform=...>, applied by the caller after
+    this function returns) that itself scales geometry, that extra scaling is
+    NOT accounted for here -- the effective mm tolerance for such paths may
+    differ from CURVE_TOLERANCE_MM by the transform's own scale factor. This
+    is a known, documented simplification: composing an arbitrary transform's
+    scale component was judged out of scope for this pass.
     """
+    if scale_x <= 0 or not math.isfinite(scale_x):
+        scale_x = 1.0
+    if scale_y <= 0 or not math.isfinite(scale_y):
+        scale_y = 1.0
+    curve_tol = CURVE_TOLERANCE_MM / max(scale_x, scale_y)
+
     ops = _split_ops(d)
     pts: List[Pt] = []
     cx = cy = 0.0
     sx = sy = 0.0  # start of subpath
+
+    # Track the previous command (uppercase) and its trailing control point,
+    # needed to compute reflected control points for S/s and T/t.
+    prev_cmd: Optional[str] = None
+    prev_ctrl: Optional[Tuple[float, float]] = None
 
     for op in ops:
         if not op:
@@ -491,6 +618,7 @@ def _path_to_points(d: str) -> List[Pt]:
                     cy = cy + y if rel else y
                     pts.append(Pt(cx, cy, "L"))
                     i += 2
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "L":
@@ -502,29 +630,32 @@ def _path_to_points(d: str) -> List[Pt]:
                 cy = cy + y if rel else y
                 pts.append(Pt(cx, cy, "L"))
                 i += 2
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "H":
             for x in args:
                 cx = cx + x if rel else x
                 pts.append(Pt(cx, cy, "L"))
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "V":
             for y in args:
                 cy = cy + y if rel else y
                 pts.append(Pt(cx, cy, "L"))
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "Z":
             # close path
             cx, cy = sx, sy
             pts.append(Pt(cx, cy, "L"))
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "C":
             # Cubic bezier: can have multiple segments (6*n)
-            segs = 8
             i = 0
             while i + 5 < len(args):
                 x1, y1, x2, y2, x3, y3 = args[i : i + 6]
@@ -538,12 +669,95 @@ def _path_to_points(d: str) -> List[Pt]:
                     p2 = (x2, y2)
                     p3 = (x3, y3)
 
+                segs = _cubic_seg_count(p0, p1, p2, p3, curve_tol)
                 for k in range(1, segs + 1):
                     tt = k / segs
                     bx, by = _bezier_point(p0, p1, p2, p3, tt)
                     pts.append(Pt(bx, by, "L"))
                 cx, cy = p3
+                prev_ctrl = p2
                 i += 6
+            prev_cmd = T
+            continue
+
+        if T == "S":
+            # Smooth cubic bezier: reflect previous C/S second control point about
+            # the current point to get this segment's first control point.
+            i = 0
+            while i + 3 < len(args):
+                x2, y2, x3, y3 = args[i : i + 4]
+                p0 = (cx, cy)
+                if prev_cmd in ("C", "S") and prev_ctrl is not None:
+                    p1 = (2 * cx - prev_ctrl[0], 2 * cy - prev_ctrl[1])
+                else:
+                    p1 = (cx, cy)
+                if rel:
+                    p2 = (cx + x2, cy + y2)
+                    p3 = (cx + x3, cy + y3)
+                else:
+                    p2 = (x2, y2)
+                    p3 = (x3, y3)
+
+                segs = _cubic_seg_count(p0, p1, p2, p3, curve_tol)
+                for k in range(1, segs + 1):
+                    tt = k / segs
+                    bx, by = _bezier_point(p0, p1, p2, p3, tt)
+                    pts.append(Pt(bx, by, "L"))
+                cx, cy = p3
+                prev_ctrl = p2
+                prev_cmd = "S"
+                i += 4
+            continue
+
+        if T == "Q":
+            # Quadratic bezier, elevated to cubic form for reuse of _bezier_point.
+            i = 0
+            while i + 3 < len(args):
+                x1, y1, x2, y2 = args[i : i + 4]
+                p0 = (cx, cy)
+                if rel:
+                    p1 = (cx + x1, cy + y1)
+                    p2 = (cx + x2, cy + y2)
+                else:
+                    p1 = (x1, y1)
+                    p2 = (x2, y2)
+
+                segs = _quad_seg_count(p0, p1, p2, curve_tol)
+                for k in range(1, segs + 1):
+                    tt = k / segs
+                    bx, by = _quad_bezier_point(p0, p1, p2, tt)
+                    pts.append(Pt(bx, by, "L"))
+                cx, cy = p2
+                prev_ctrl = p1
+                prev_cmd = "Q"
+                i += 4
+            continue
+
+        if T == "T":
+            # Smooth quadratic: reflect previous Q/T control point about the
+            # current point; if no such previous command, control point == current point.
+            i = 0
+            while i + 1 < len(args):
+                x2, y2 = args[i], args[i + 1]
+                p0 = (cx, cy)
+                if prev_cmd in ("Q", "T") and prev_ctrl is not None:
+                    p1 = (2 * cx - prev_ctrl[0], 2 * cy - prev_ctrl[1])
+                else:
+                    p1 = (cx, cy)
+                if rel:
+                    p2 = (cx + x2, cy + y2)
+                else:
+                    p2 = (x2, y2)
+
+                segs = _quad_seg_count(p0, p1, p2, curve_tol)
+                for k in range(1, segs + 1):
+                    tt = k / segs
+                    bx, by = _quad_bezier_point(p0, p1, p2, tt)
+                    pts.append(Pt(bx, by, "L"))
+                cx, cy = p2
+                prev_ctrl = p1
+                prev_cmd = "T"
+                i += 2
             continue
 
         if T == "A":
@@ -564,10 +778,13 @@ def _path_to_points(d: str) -> List[Pt]:
                     pts.append(Pt(ax, ay, "L"))
                 cx, cy = x2, y2
                 i += 7
+            prev_cmd, prev_ctrl = T, None
             continue
 
-        # Unsupported commands are ignored for now
-        # (A arcs, Q/T quadratic, S smooth cubic, etc.)
+        # A genuinely unknown command must not be silently ignored: dropping it
+        # both loses geometry and fails to advance (cx, cy), displacing every
+        # subsequent command in the path.
+        raise ValueError(f"Unsupported SVG path command: {t!r} in path data {d!r}")
 
     return pts
 
@@ -595,6 +812,253 @@ def _dist(a: Tuple[float, float], b: Tuple[float, float]) -> float:
     dx = b[0] - a[0]
     dy = b[1] - a[1]
     return math.hypot(dx, dy)
+
+
+# ---------------------------------------------------------------------------
+# Task 1/2: toolpath path-order optimization
+# ---------------------------------------------------------------------------
+
+
+def _reverse_path(pts: List[Pt]) -> List[Pt]:
+    """
+    Reverse a path's point order in place-semantics (returns a new list),
+    rebuilding `cmd` so the new first point is 'M' (rapid target) and every
+    following point is 'L' (cut). This is geometry-preserving: the exact same
+    set of segments gets drawn, just walked from the opposite end. The `cmd`
+    field must be rebuilt rather than just flipping the list, since the
+    original first point ('M') is now in the interior (must become 'L') and
+    the original last point is now first (must become 'M').
+    """
+    if not pts:
+        return pts
+    rev = list(reversed(pts))
+    out = [Pt(rev[0].x, rev[0].y, "M")]
+    for p in rev[1:]:
+        out.append(Pt(p.x, p.y, "L"))
+    return out
+
+
+def _path_endpoints(pts: List[Pt]) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+    if not pts:
+        return (0.0, 0.0), (0.0, 0.0)
+    return (pts[0].x, pts[0].y), (pts[-1].x, pts[-1].y)
+
+
+def _two_opt_improve(
+    tour: List[List[Pt]], start_point: Tuple[float, float]
+) -> List[List[Pt]]:
+    """
+    Bounded 2-opt improvement pass over an already-ordered (and already
+    reversal-decided) tour of paths. Classic 2-opt for a directed
+    Hamiltonian path: removing two edges and reconnecting requires reversing
+    the *order* of the paths between them AND flipping each path's own
+    direction (since the sub-tour is now walked backwards).
+
+    Bounded by TWO_OPT_MAX_PASSES full sweeps and TWO_OPT_MAX_SWAPS total
+    accepted swaps, so a pathological or oscillating case cannot hang.
+    """
+    n = len(tour)
+    if n < 3:
+        return tour
+
+    entries: List[Tuple[float, float]] = []
+    exits: List[Tuple[float, float]] = []
+    for pts in tour:
+        e0, e1 = _path_endpoints(pts)
+        entries.append(e0)
+        exits.append(e1)
+
+    total_swaps = 0
+    for _pass in range(TWO_OPT_MAX_PASSES):
+        improved = False
+        for i in range(n - 1):
+            prev_exit = start_point if i == 0 else exits[i - 1]
+            for j in range(i + 1, n):
+                next_entry = entries[j + 1] if j + 1 < n else None
+
+                old_cost = _dist(prev_exit, entries[i])
+                new_cost = _dist(prev_exit, exits[j])
+                if next_entry is not None:
+                    old_cost += _dist(exits[j], next_entry)
+                    new_cost += _dist(entries[i], next_entry)
+
+                if new_cost + 1e-9 < old_cost:
+                    seg_entries = entries[i : j + 1]
+                    seg_exits = exits[i : j + 1]
+                    entries[i : j + 1] = list(reversed(seg_exits))
+                    exits[i : j + 1] = list(reversed(seg_entries))
+                    tour[i : j + 1] = [_reverse_path(p) for p in reversed(tour[i : j + 1])]
+
+                    improved = True
+                    total_swaps += 1
+                    if total_swaps >= TWO_OPT_MAX_SWAPS:
+                        return tour
+        if not improved:
+            break
+    return tour
+
+
+def _optimize_path_order(
+    paths: List[List[Pt]], start_point: Tuple[float, float] = (0.0, 0.0)
+) -> List[List[Pt]]:
+    """
+    Reorder `paths` (a list of point-lists sharing one coordinate space, e.g.
+    one job/color batch) to reduce total rapid-move travel: greedy
+    nearest-neighbour with optional path reversal, followed by a bounded
+    2-opt improvement pass.
+
+    - Greedy nearest-neighbour: repeatedly pick the unvisited path whose
+      entry point is closest to the current head position; the head then
+      moves to that path's exit point.
+    - Reversal: for each candidate, both endpoints are considered as the
+      possible entry; whichever is closer wins, reversing the path's point
+      list (and rebuilding `cmd`) if its far end is nearer.
+    - Closed contours (first ~= last point) are NOT seam-rotated: rotating a
+      closed contour's start point is a real extra win, but it also moves
+      where the lead-in/out burn mark lands on the cut edge, which is a cut
+      *quality* tradeoff, not a pure toolpath-time one. Skipped deliberately
+      here rather than risk that regression silently; see report.
+
+    IMPORTANT: callers must invoke this once per job/color batch, and never
+    on a list merged across batches -- job order is user-controlled and
+    reordering across batches would silently violate user intent.
+    """
+    n = len(paths)
+    if n <= 1:
+        return list(paths)
+
+    endpoints = [_path_endpoints(pts) for pts in paths]
+    visited = [False] * n
+    ordered: List[List[Pt]] = []
+    head = start_point
+
+    for _ in range(n):
+        best_idx = -1
+        best_dist = math.inf
+        best_rev = False
+        for idx in range(n):
+            if visited[idx]:
+                continue
+            entry, exit_ = endpoints[idx]
+            d_fwd = _dist(head, entry)
+            d_rev = _dist(head, exit_)
+            if d_rev < d_fwd:
+                cand_d, cand_rev = d_rev, True
+            else:
+                cand_d, cand_rev = d_fwd, False
+            if cand_d < best_dist:
+                best_dist = cand_d
+                best_idx = idx
+                best_rev = cand_rev
+
+        pts = paths[best_idx]
+        if best_rev:
+            pts = _reverse_path(pts)
+            head = endpoints[best_idx][0]
+        else:
+            head = endpoints[best_idx][1]
+        ordered.append(pts)
+        visited[best_idx] = True
+
+    if n <= TWO_OPT_MAX_PATHS:
+        ordered = _two_opt_improve(ordered, start_point)
+
+    return ordered
+
+
+# ---------------------------------------------------------------------------
+# Task 4: path simplification (Douglas-Peucker)
+# ---------------------------------------------------------------------------
+
+
+def _point_segment_dist(
+    p: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]
+) -> float:
+    ax, ay = a
+    bx, by = b
+    px, py = p
+    dx, dy = bx - ax, by - ay
+    if dx == 0.0 and dy == 0.0:
+        return _dist(p, a)
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    proj = (ax + t * dx, ay + t * dy)
+    return _dist(p, proj)
+
+
+def _douglas_peucker(
+    points: List[Tuple[float, float]], tolerance: float
+) -> List[Tuple[float, float]]:
+    """
+    Iterative (stack-based, not recursive) Douglas-Peucker polyline
+    simplification. Iterative to avoid Python's recursion limit on paths with
+    many collinear-violating points (worst case depth == point count).
+    Always keeps the first and last point exactly.
+    """
+    n = len(points)
+    if n < 3:
+        return list(points)
+
+    keep = [False] * n
+    keep[0] = True
+    keep[-1] = True
+    stack = [(0, n - 1)]
+    while stack:
+        start_idx, end_idx = stack.pop()
+        if end_idx <= start_idx + 1:
+            continue
+        a = points[start_idx]
+        b = points[end_idx]
+        max_dist = -1.0
+        split_idx = -1
+        for i in range(start_idx + 1, end_idx):
+            d = _point_segment_dist(points[i], a, b)
+            if d > max_dist:
+                max_dist = d
+                split_idx = i
+        if max_dist > tolerance:
+            keep[split_idx] = True
+            stack.append((start_idx, split_idx))
+            stack.append((split_idx, end_idx))
+    return [points[i] for i in range(n) if keep[i]]
+
+
+def _simplify_pts(pts: List[Pt], tolerance: float) -> List[Pt]:
+    """
+    Douglas-Peucker-simplify a flattened/transformed point list, in whatever
+    coordinate space it's already in (callers apply this once points are in
+    mm, so `tolerance` means mm of chord error).
+
+    A single parsed <path> element's `d` can itself contain multiple
+    subpaths (multiple 'M' commands); simplification must not merge points
+    across such a boundary, so this splits on 'M' first and simplifies each
+    subpath independently, which also guarantees each subpath's first and
+    last point survive exactly.
+    """
+    if len(pts) < 3:
+        return pts
+
+    subpaths: List[List[Pt]] = []
+    cur: List[Pt] = []
+    for p in pts:
+        if p.cmd == "M" and cur:
+            subpaths.append(cur)
+            cur = []
+        cur.append(p)
+    if cur:
+        subpaths.append(cur)
+
+    out: List[Pt] = []
+    for sp in subpaths:
+        if len(sp) < 3:
+            out.extend(sp)
+            continue
+        coords = [(p.x, p.y) for p in sp]
+        simplified = _douglas_peucker(coords, tolerance)
+        out.append(Pt(simplified[0][0], simplified[0][1], "M"))
+        for x, y in simplified[1:]:
+            out.append(Pt(x, y, "L"))
+    return out
 
 
 def _make_meta_header(
@@ -791,22 +1255,62 @@ def _fmt3(n: float) -> str:
     return f"{float(n):.3f}"
 
 
+def _looks_like_svg(raw: bytes) -> bool:
+    """True if these bytes are an SVG document rather than a bitmap."""
+    head = raw[:512].lstrip()
+    if head[:5].lower() == b"<?xml":
+        return b"<svg" in raw[:2048].lower()
+    return head[:4].lower() == b"<svg"
+
+
 def _decode_image_data(image_base64: str):
     """
     Accepts a raw base64 string or a data URL: data:image/png;base64,...
     Returns a Pillow Image.
+
+    Raises ValueError with an actionable message when the payload is not a
+    bitmap Pillow can open. Feeding an SVG here is the common mistake - this is
+    an SVG-centric app, and the raster picker's `accept="image/*"` offers them -
+    and Pillow's own error for that case is just "cannot identify image file
+    <_io.BytesIO object at 0x...>", which says nothing useful to a user.
     """
-    from PIL import Image  # type: ignore
+    from PIL import Image, UnidentifiedImageError  # type: ignore
     s = (image_base64 or "").strip()
     if not s:
         raise ValueError("image_base64 is required")
+
+    declared_mime = None
     if s.startswith("data:"):
         comma = s.find(",")
         if comma == -1:
             raise ValueError("Invalid data URL")
+        header = s[5:comma]
+        declared_mime = header.split(";")[0].strip().lower() or None
         s = s[comma + 1 :]
-    raw = base64.b64decode(s)
-    return Image.open(BytesIO(raw))
+
+    try:
+        raw = base64.b64decode(s)
+    except Exception as exc:
+        raise ValueError(f"Image data is not valid base64: {exc}") from exc
+
+    if not raw:
+        raise ValueError("Image data is empty")
+
+    if declared_mime == "image/svg+xml" or _looks_like_svg(raw):
+        raise ValueError(
+            "This is an SVG, and raster mode needs a bitmap (PNG, JPEG, WEBP, GIF or BMP). "
+            "To cut or engrave an SVG, use Vector mode instead. To raster an SVG, export it "
+            "to PNG first."
+        )
+
+    try:
+        return Image.open(BytesIO(raw))
+    except UnidentifiedImageError as exc:
+        kind = f" (declared as {declared_mime})" if declared_mime else ""
+        raise ValueError(
+            f"Could not read this image{kind}. Raster mode supports PNG, JPEG, WEBP, GIF and "
+            "BMP. Formats such as HEIC or AVIF are not supported - convert to PNG first."
+        ) from exc
 
 
 def _apply_gamma_lut(im_l, gamma: float):
@@ -1067,18 +1571,20 @@ def _generate_gcode_from_paths(
     if isinstance(path_ds, list) and path_ds and isinstance(path_ds[0], tuple):
         # (d, Mat) tuples
         for d, mat in path_ds:  # type: ignore[misc]
-            pts = _path_to_points(d)
+            pts = _path_to_points(d, scale_x, scale_y)
             if not pts:
                 continue
             pts = _apply_mat_to_points(pts, mat)
             scaled = [Pt(p.x * scale_x, p.y * scale_y, p.cmd) for p in pts]
+            scaled = _simplify_pts(scaled, SIMPLIFY_TOLERANCE_MM)
             all_paths.append(scaled)
     else:
         for d in path_ds:
-            pts = _path_to_points(d)
+            pts = _path_to_points(d, scale_x, scale_y)
             if not pts:
                 continue
             scaled = [Pt(p.x * scale_x, p.y * scale_y, p.cmd) for p in pts]
+            scaled = _simplify_pts(scaled, SIMPLIFY_TOLERANCE_MM)
             all_paths.append(scaled)
 
     if not all_paths:
@@ -1158,11 +1664,18 @@ def _generate_gcode_from_paths(
     # Then anchor within the bed based on origin choice
     if origin == "custom":
         if origin_x is not None and origin_y is not None:
-            # Custom origin: user specifies exact X, Y position (in machine coordinates, bottom-left origin)
-            # We need to place the design so its top-left corner (after offset) is at (origin_x, origin_y)
-            # But SVG Y is top-down, machine Y is bottom-up, so we flip
+            # Custom origin: (origin_x, origin_y) is where the design's
+            # bottom-left corner goes, in machine coordinates.
+            #
+            # No Y flip here. Points were converted to machine Y-up above
+            # (my = svg_h_mm - p.y) and offset_y = -miny already puts the
+            # design's bottom edge at Y=0, so origin_y adds directly. The old
+            # `BED_H_MM - origin_y - height` applied a top-down formula to
+            # already-flipped coordinates, which double-flipped: custom (0,0)
+            # landed the job at the TOP of the bed, matching `top-left` instead
+            # of `bottom-left`, and disagreed with what the UI drew.
             offset_x += origin_x
-            offset_y += (BED_H_MM - origin_y - height)  # Flip Y: machine Y=0 is bottom, SVG Y=0 is top
+            offset_y += origin_y
         else:
             # Fallback to bottom-left if custom coords not provided
             origin = "bottom-left"
@@ -1192,6 +1705,15 @@ def _generate_gcode_from_paths(
             f"(bed {BED_W_MM:.0f}x{BED_H_MM:.0f} mm)"
         )
 
+    # 4b) Task 1: optimize path order to minimize rapid travel. This is a single
+    # job/legacy call, so all_paths is one batch -- safe to reorder as a whole.
+    # `local_start` is (0,0) in *machine* space (the physical head-start
+    # position), expressed back in this function's pre-offset/pre-flip point
+    # space; since translation and the Y-flip are both distance-preserving,
+    # nearest-neighbour distances computed here equal machine-space distances.
+    local_start = (-offset_x, svg_h_mm + offset_y)
+    all_paths = _optimize_path_order(all_paths, start_point=local_start)
+
     # 5) Power scaling (Python original: ceil(power * 2.55))
     power_s = int(math.ceil(float(power_pct) * 2.55))
     power_s = max(0, min(S_MAX, power_s))
@@ -1213,7 +1735,11 @@ def _generate_gcode_from_paths(
             out.append(f"; --- Pass {pidx + 1}/{passes} ---\n")
         out.append(f"F{int(speed)}\n")
 
-        for pts in all_paths:
+        # Task 2: alternate path-list order each pass (boustrophedon at the
+        # path level) so the head doesn't rapid all the way back to the first
+        # path after finishing at the last one on the previous pass.
+        seq = all_paths if pidx % 2 == 0 else list(reversed(all_paths))
+        for pts in seq:
             last = None  # last machine coord (with offsets)
             laser_on = False
             first_move = None
@@ -1240,8 +1766,21 @@ def _generate_gcode_from_paths(
                     if not laser_on:
                         out.append(f"M3 S{power_s}\n")
                         laser_on = True
-                    if i == len(pts) - 1 and first_move is not None and abs(mx - first_move[0]) < ZERO_MOVE_THRESHOLD and abs(my - first_move[1]) < ZERO_MOVE_THRESHOLD:
-                        continue
+                    # NOTE: previously this also skipped the point when it was
+                    # merely the LAST point of the path and equal to
+                    # `first_move`, regardless of distance from the
+                    # immediately preceding emitted point (`last`). That is
+                    # wrong: for an explicitly closed contour (M...L...Z)
+                    # whose closing edge is represented by exactly one final
+                    # point coincident with the start, that final point is
+                    # real geometry -- the closing cut -- not a redundant
+                    # duplicate. Skipping it silently left the last edge of
+                    # every explicitly-closed shape un-cut. The zero-length
+                    # dedup a few lines up (gated on proximity to `last`,
+                    # the actual previous position) already correctly
+                    # handles the genuinely redundant case where a tool
+                    # emits both an explicit closing L and a Z back to the
+                    # same point.
                     out.append(f"G1 X{_fmt(mx)} Y{_fmt(my)}\n")
 
                 last = (mx, my)
@@ -1302,18 +1841,18 @@ def generate_vector_gcode(svg_path, speed=1000, power=100.0, passes=1, origin: s
         if d and str(d).strip():
             path_ds.append((str(d), mat))
 
-        return _generate_gcode_from_paths(
-            path_ds=path_ds,
-            svg_h_mm=svg_h_mm,
-            scale_x=scale_x,
-            scale_y=scale_y,
-            speed=speed_i,
-            power_pct=power_f,
-            passes=passes_i,
-            origin=origin,
-            origin_x=None,  # Single-job mode doesn't support custom origin yet
-            origin_y=None,
-        )
+    return _generate_gcode_from_paths(
+        path_ds=path_ds,
+        svg_h_mm=svg_h_mm,
+        scale_x=scale_x,
+        scale_y=scale_y,
+        speed=speed_i,
+        power_pct=power_f,
+        passes=passes_i,
+        origin=origin,
+        origin_x=None,  # Single-job mode doesn't support custom origin yet
+        origin_y=None,
+    )
 
 
 def _parse_style(style: Optional[str]) -> dict:
@@ -1356,17 +1895,65 @@ def _normalize_color(c: Optional[str]) -> Optional[str]:
     return named.get(c, c)
 
 
+def _own_paint(el, prop: str) -> Optional[str]:
+    """An element's own stroke/fill, from the attribute or its style attribute."""
+    value = el.get(prop)
+    if not value or value == 'none':
+        value = _parse_style(el.get('style')).get(prop)
+    if not value or value == 'none':
+        return None
+    return value
+
+
+def _inherited_paint(el, prop: str, max_depth: int = 64) -> Optional[str]:
+    """Resolve stroke/fill the way SVG does - walking up to the nearest ancestor
+    that sets it. Editors routinely put stroke on a parent <g> and leave the
+    shapes bare; reading only the element itself finds no colour at all."""
+    node = el
+    depth = 0
+    while node is not None and depth < max_depth:
+        value = _own_paint(node, prop)
+        if value:
+            return value
+        node = node.getparent()
+        depth += 1
+    return None
+
+
 def _element_color(el) -> Optional[str]:
-    # Match frontend behavior: stroke, else style stroke, else fill
-    stroke = el.get('stroke')
-    if not stroke or stroke == 'none':
-        style = _parse_style(el.get('style'))
-        stroke = style.get('stroke')
-    if not stroke or stroke == 'none':
-        fill = el.get('fill')
-        if fill and fill != 'none':
-            stroke = fill
-    return _normalize_color(stroke)
+    # Match frontend behavior (svg-parser.js getStrokeColor): stroke wins, fill
+    # is the fallback, and both are inherited from ancestors. Keep the two in
+    # step - a colour the frontend reports but the backend cannot resolve
+    # produces a job that silently cuts nothing.
+    stroke = _inherited_paint(el, 'stroke')
+    if stroke:
+        return _normalize_color(stroke)
+    fill = _inherited_paint(el, 'fill')
+    if fill:
+        return _normalize_color(fill)
+    return None
+
+
+def _empty_vector_gcode() -> str:
+    """A syntactically valid program that cuts nothing.
+
+    Returned when the caller supplied jobs but none of them are enabled or
+    matched a colour in the document. The laser is never enabled, so this is
+    safe to send to the machine.
+    """
+    return (
+        ";$M Meta untilchar 000204\n"
+        ";$M NumOps 0\n"
+        ";$M Time 0\n"
+        "\n"
+        "M5 ; Turn laser off\n"
+        "G21 ; Units in mm\n"
+        "\n"
+        "; No enabled jobs matched the document - nothing to cut.\n"
+        "\n"
+        "G0 X0 Y0\n"
+        "M5 ; Turn laser off\n"
+    )
 
 
 def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bottom-left", origin_x: float = None, origin_y: float = None) -> str:
@@ -1404,6 +1991,14 @@ def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bot
             continue
 
     if not requested:
+        # A caller that passed no `jobs` at all wants the legacy whole-file
+        # behaviour. But a caller that passed jobs which all resolved away -
+        # every layer disabled, or colours that matched nothing - asked for
+        # nothing to be cut. Falling through to the global path there cut every
+        # path in the document at 100% power, which is the opposite of what the
+        # user selected and can destroy the workpiece.
+        if jobs:
+            return _empty_vector_gcode()
         # fallback: single global
         return generate_vector_gcode(svg_path=svg_path, speed=1000, power=100.0, passes=1, origin=origin)
 
@@ -1440,6 +2035,11 @@ def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bot
         batches.append({'color': c, 'paths': paths, **s})
 
     if not batches:
+        # Same reasoning as the `not requested` guard above: the caller asked
+        # for specific colours and none of them are present in the document.
+        # Cutting the whole file at 100% power instead is never what was meant.
+        if jobs:
+            return _empty_vector_gcode()
         return generate_vector_gcode(svg_path=svg_path, speed=1000, power=100.0, passes=1, origin=origin)
 
     return _generate_gcode_from_job_batches(
@@ -1471,11 +2071,13 @@ def _generate_gcode_from_job_batches(
     for b in batches:
         paths_pts = []
         for d, mat in b['paths']:
-            pts = _path_to_points(d)
+            pts = _path_to_points(d, scale_x, scale_y)
             if not pts:
                 continue
             pts = _apply_mat_to_points(pts, mat)
-            paths_pts.append([Pt(p.x * scale_x, p.y * scale_y, p.cmd) for p in pts])
+            scaled = [Pt(p.x * scale_x, p.y * scale_y, p.cmd) for p in pts]
+            scaled = _simplify_pts(scaled, SIMPLIFY_TOLERANCE_MM)
+            paths_pts.append(scaled)
         if paths_pts:
             jobs_pts.append({**b, 'paths_pts': paths_pts})
 
@@ -1487,6 +2089,7 @@ def _generate_gcode_from_job_batches(
     est_min = 0.0
     for job in jobs_pts:
         speed = int(job['speed'])
+        job_est_min = 0.0
         for pts in job['paths_pts']:
             last_xy = None
             for p in pts:
@@ -1496,11 +2099,11 @@ def _generate_gcode_from_job_batches(
                 miny = min(miny, my); maxy = max(maxy, my)
                 if last_xy is not None:
                     if p.cmd == 'L':
-                        est_min += _dist(last_xy, (mx, my)) / speed
+                        job_est_min += _dist(last_xy, (mx, my)) / speed
                     elif p.cmd == 'M':
-                        est_min += _dist(last_xy, (mx, my)) / RAPID_SPEED
+                        job_est_min += _dist(last_xy, (mx, my)) / RAPID_SPEED
                 last_xy = (mx, my)
-        est_min *= max(1, int(job.get('passes', 1)))
+        est_min += job_est_min * max(1, int(job.get('passes', 1)))
 
     # Fit scale to bed (uniform)
     width = (maxx - minx) if (math.isfinite(maxx) and math.isfinite(minx)) else 0.0
@@ -1537,11 +2140,12 @@ def _generate_gcode_from_job_batches(
     
     if origin == "custom":
         if origin_x is not None and origin_y is not None:
-            # Custom origin: user specifies exact X, Y position (in machine coordinates, bottom-left origin)
-            # We need to place the design so its top-left corner (after offset) is at (origin_x, origin_y)
-            # But SVG Y is top-down, machine Y is bottom-up, so we flip
+            # Custom origin: (origin_x, origin_y) is where the design's
+            # bottom-left corner goes, in machine coordinates. See the matching
+            # comment in generate_vector_gcode - no Y flip, the points are
+            # already machine Y-up and offset_y has zeroed the bottom edge.
             offset_x += origin_x
-            offset_y += (BED_H_MM - origin_y - h)  # Flip Y: machine Y=0 is bottom, SVG Y=0 is top
+            offset_y += origin_y
         else:
             # Fallback to bottom-left if custom coords not provided
             origin = "bottom-left"
@@ -1566,6 +2170,25 @@ def _generate_gcode_from_job_batches(
             f"Generated coordinates out of bed bounds after fit/offset: "
             f"X[{b_minx:.3f},{b_maxx:.3f}] Y[{b_miny:.3f},{b_maxy:.3f}]"
         )
+
+    # Task 1: optimize path order within each job/color batch. Never reorder
+    # across batches -- job order is user-controlled (cut-before-engrave etc.)
+    # and each job here gets its own independent nearest-neighbour tour,
+    # chained head-to-head so job N+1's tour starts from wherever job N's
+    # (pass-alternation-aware) tour actually ends.
+    local_start = (-offset_x, svg_h_mm + offset_y)
+    running_head = local_start
+    for job in jobs_pts:
+        ordered = _optimize_path_order(job['paths_pts'], start_point=running_head)
+        job['paths_pts'] = ordered
+        passes_n = int(job.get('passes', 1))
+        _, exit0 = _path_endpoints(ordered[0])
+        _, exitN = _path_endpoints(ordered[-1])
+        # Task 2 reverses path-list order on odd passes; the actual head
+        # position after this job's passes therefore depends on whether the
+        # last pass ran forward (ends at last path's exit) or reversed
+        # (ends at first path's own exit, since only list order flips).
+        running_head = exitN if passes_n % 2 == 1 else exit0
 
     # Thumbnail uses all segments
     all_paths_flat = []
@@ -1606,7 +2229,9 @@ def _generate_gcode_from_job_batches(
                 out.append(f"; Pass {pidx + 1}/{passes}\n")
             out.append(f"F{speed}\n")
 
-            for pts in job['paths_pts']:
+            # Task 2: alternate path-list order each pass within this job.
+            seq = job['paths_pts'] if pidx % 2 == 0 else list(reversed(job['paths_pts']))
+            for pts in seq:
                 last = None
                 laser_on = False
                 first_move = None
@@ -1629,8 +2254,13 @@ def _generate_gcode_from_job_batches(
                         if not laser_on:
                             out.append(f"M3 S{power_s}\n")
                             laser_on = True
-                        if i == len(pts) - 1 and first_move is not None and abs(mx - first_move[0]) < ZERO_MOVE_THRESHOLD and abs(my - first_move[1]) < ZERO_MOVE_THRESHOLD:
-                            continue
+                        # See note in _generate_gcode_from_paths: do NOT skip
+                        # this point just because it's the path's last point
+                        # and equals `first_move` -- for a closed contour
+                        # (M...L...Z) that final point IS the closing edge's
+                        # real endpoint, not a redundant duplicate. The
+                        # zero-length dedup above (gated on `last`) already
+                        # handles genuine duplicates correctly.
                         out.append(f"G1 X{_fmt(mx)} Y{_fmt(my)}\n")
                     last = (mx, my)
                 if laser_on:

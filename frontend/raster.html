@@ -46,7 +46,7 @@
           <div>
             <div class="row">
               <label>Image</label>
-              <input id="file" type="file" accept="image/*" />
+              <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" />
             </div>
 
             <div class="row">
@@ -313,6 +313,18 @@
       $("generate").addEventListener("click", async () => {
         const f = $("file").files && $("file").files[0];
         if (!f) return setStatus("Pick an image first.");
+
+        // Caught here as well as server-side: this is an SVG-centric app, so
+        // reaching for an SVG in raster mode is the natural mistake, and the
+        // server can only answer after the whole file has been uploaded.
+        const isSvg = f.type === "image/svg+xml" || /\.svg$/i.test(f.name || "");
+        if (isSvg) {
+          return setStatus(
+            "That is an SVG. Raster mode needs a bitmap (PNG, JPEG, WEBP, GIF or BMP). " +
+            "To cut or engrave an SVG use Vector mode; to raster it, export to PNG first."
+          );
+        }
+
         setStatus("Encoding image…");
         const dataUrl = await fileToDataURL(f);
 
