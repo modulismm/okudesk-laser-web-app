@@ -1409,18 +1409,18 @@ def generate_vector_gcode(svg_path, speed=1000, power=100.0, passes=1, origin: s
         if d and str(d).strip():
             path_ds.append((str(d), mat))
 
-        return _generate_gcode_from_paths(
-            path_ds=path_ds,
-            svg_h_mm=svg_h_mm,
-            scale_x=scale_x,
-            scale_y=scale_y,
-            speed=speed_i,
-            power_pct=power_f,
-            passes=passes_i,
-            origin=origin,
-            origin_x=None,  # Single-job mode doesn't support custom origin yet
-            origin_y=None,
-        )
+    return _generate_gcode_from_paths(
+        path_ds=path_ds,
+        svg_h_mm=svg_h_mm,
+        scale_x=scale_x,
+        scale_y=scale_y,
+        speed=speed_i,
+        power_pct=power_f,
+        passes=passes_i,
+        origin=origin,
+        origin_x=None,  # Single-job mode doesn't support custom origin yet
+        origin_y=None,
+    )
 
 
 def _parse_style(style: Optional[str]) -> dict:
