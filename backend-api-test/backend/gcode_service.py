@@ -1594,6 +1594,7 @@ def _generate_gcode_from_job_batches(
     est_min = 0.0
     for job in jobs_pts:
         speed = int(job['speed'])
+        job_est_min = 0.0
         for pts in job['paths_pts']:
             last_xy = None
             for p in pts:
@@ -1603,11 +1604,11 @@ def _generate_gcode_from_job_batches(
                 miny = min(miny, my); maxy = max(maxy, my)
                 if last_xy is not None:
                     if p.cmd == 'L':
-                        est_min += _dist(last_xy, (mx, my)) / speed
+                        job_est_min += _dist(last_xy, (mx, my)) / speed
                     elif p.cmd == 'M':
-                        est_min += _dist(last_xy, (mx, my)) / RAPID_SPEED
+                        job_est_min += _dist(last_xy, (mx, my)) / RAPID_SPEED
                 last_xy = (mx, my)
-        est_min *= max(1, int(job.get('passes', 1)))
+        est_min += job_est_min * max(1, int(job.get('passes', 1)))
 
     # Fit scale to bed (uniform)
     width = (maxx - minx) if (math.isfinite(maxx) and math.isfinite(minx)) else 0.0
