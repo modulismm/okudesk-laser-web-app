@@ -339,15 +339,29 @@ def _circle_ellipse_to_path_d(el) -> Optional[str]:
     return d
 
 
+# Containers whose contents are definitions, not drawings. A <clipPath> or
+# <defs> shape is never rendered on its own, so cutting it would burn geometry
+# the user cannot see in any viewer.
+_NON_RENDERED_CONTAINERS = frozenset({
+    "defs", "clippath", "mask", "symbol", "marker", "pattern",
+    "metadata", "title", "desc", "style", "script",
+})
+
+
 def _extract_drawables(svg_root) -> List[Tuple[object, Mat]]:
     """
     Walk the SVG tree and return drawable elements with their accumulated transform matrix.
+
+    Recurses through every container (<g>, <a>, <switch>, nested <svg>, ...),
+    skipping only those whose contents are definitions rather than drawings.
     """
     out: List[Tuple[object, Mat]] = []
 
     def walk(el, parent_mat: Mat):
         this_mat = parent_mat.mul(_parse_transform(el.get("transform")))
         lname = _local_name(el)
+        if lname in _NON_RENDERED_CONTAINERS:
+            return
         if lname in ("path", "rect", "circle", "ellipse", "line", "polyline", "polygon"):
             out.append((el, this_mat))
         for child in list(el):
@@ -1881,17 +1895,43 @@ def _normalize_color(c: Optional[str]) -> Optional[str]:
     return named.get(c, c)
 
 
+def _own_paint(el, prop: str) -> Optional[str]:
+    """An element's own stroke/fill, from the attribute or its style attribute."""
+    value = el.get(prop)
+    if not value or value == 'none':
+        value = _parse_style(el.get('style')).get(prop)
+    if not value or value == 'none':
+        return None
+    return value
+
+
+def _inherited_paint(el, prop: str, max_depth: int = 64) -> Optional[str]:
+    """Resolve stroke/fill the way SVG does - walking up to the nearest ancestor
+    that sets it. Editors routinely put stroke on a parent <g> and leave the
+    shapes bare; reading only the element itself finds no colour at all."""
+    node = el
+    depth = 0
+    while node is not None and depth < max_depth:
+        value = _own_paint(node, prop)
+        if value:
+            return value
+        node = node.getparent()
+        depth += 1
+    return None
+
+
 def _element_color(el) -> Optional[str]:
-    # Match frontend behavior: stroke, else style stroke, else fill
-    stroke = el.get('stroke')
-    if not stroke or stroke == 'none':
-        style = _parse_style(el.get('style'))
-        stroke = style.get('stroke')
-    if not stroke or stroke == 'none':
-        fill = el.get('fill')
-        if fill and fill != 'none':
-            stroke = fill
-    return _normalize_color(stroke)
+    # Match frontend behavior (svg-parser.js getStrokeColor): stroke wins, fill
+    # is the fallback, and both are inherited from ancestors. Keep the two in
+    # step - a colour the frontend reports but the backend cannot resolve
+    # produces a job that silently cuts nothing.
+    stroke = _inherited_paint(el, 'stroke')
+    if stroke:
+        return _normalize_color(stroke)
+    fill = _inherited_paint(el, 'fill')
+    if fill:
+        return _normalize_color(fill)
+    return None
 
 
 def _empty_vector_gcode() -> str:

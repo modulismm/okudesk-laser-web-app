@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="50mm" height="50mm" viewBox="0 0 50 50">
+  <defs>
+    <clipPath id="c"><rect x="0" y="0" width="10" height="10"/></clipPath>
+  </defs>
+  <a xlink:href="#x">
+    <path d="M 5,5 L 45,5 L 45,45 Z" stroke="#00ff00"/>
+  </a>
+  <switch>
+    <path d="M 5,40 L 20,40" stroke="#0000ff"/>
+  </switch>
+</svg>

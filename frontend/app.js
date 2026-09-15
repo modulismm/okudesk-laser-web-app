@@ -117,6 +117,9 @@ function init() {
         svgLayer: document.getElementById('svgLayer'),
         exportBtn: document.getElementById('exportBtn'),
         previewBtn: document.getElementById('previewBtn'),
+        loadedFile: document.getElementById('loadedFile'),
+        loadedFileName: document.getElementById('loadedFileName'),
+        removeFileBtn: document.getElementById('removeFileBtn'),
         toolpathLayer: document.getElementById('toolpathLayer'),
         toggleRapidsBtn: document.getElementById('toggleRapidsBtn'),
         toggleOrderBtn: document.getElementById('toggleOrderBtn'),
@@ -356,6 +359,9 @@ function setupExport() {
     if (elements.previewBtn) {
         elements.previewBtn.addEventListener('click', previewToolpath);
     }
+    if (elements.removeFileBtn) {
+        elements.removeFileBtn.addEventListener('click', clearFile);
+    }
     if (elements.toggleRapidsBtn) {
         elements.toggleRapidsBtn.addEventListener('click', () => {
             appState.showRapids = !appState.showRapids;
@@ -493,9 +499,14 @@ function updateMaterialHint() {
     const passesTxt = preset.passes ? `${preset.passes[0]}–${preset.passes[1]} passes` : '—';
     const depthTxt = preset.depth ? `, depth ${preset.depth}` : '';
 
+    // "Score outline" is a light vector pass along the same paths - not raster
+    // engraving. Calling it "Engrave" here read as the raster mode's engraving,
+    // which is a different operation on a different kind of file.
     el.textContent = mode === 'cut'
-        ? `Cut: speed ${speedTxt}, power ${powerTxt}, ${passesTxt}${depthTxt}.`
-        : `Engrave: speed ${speedTxt}, power ${powerTxt}.`;
+        ? `Cut through: speed ${speedTxt}, power ${powerTxt}, ${passesTxt}${depthTxt}.`
+        : `Score outline: a light single pass along the vector paths - ` +
+          `speed ${speedTxt}, power ${powerTxt}. ` +
+          `For photo or greyscale engraving of an image, use Raster mode instead.`;
     el.style.display = 'block';
 }
 
@@ -574,7 +585,13 @@ async function loadFile(file) {
         if (elements.previewBtn) elements.previewBtn.disabled = false;
         setDragToPlaceEnabled(true);
         elements.statsPanel.style.display = 'block';
-        
+
+        if (elements.loadedFileName) {
+            elements.loadedFileName.textContent = file.name;
+            elements.loadedFileName.title = file.name;
+        }
+        if (elements.loadedFile) elements.loadedFile.hidden = false;
+
         showLoading(false);
     } catch (err) {
         console.error('Error loading SVG:', err);
@@ -849,9 +866,76 @@ function buildJobBounds(place) {
  * Render job cards in sidebar
  * @param {Array} jobs - Array of job objects
  */
+/**
+ * Unload the current file and return the workspace to its empty state.
+ *
+ * Everything derived from the file goes together - artwork, job list, cached
+ * G-code and the toolpath overlay. Leaving any of it behind would show data
+ * belonging to a file that is no longer open.
+ */
+function clearFile() {
+    appState.svgData = null;
+    appState.svgElement = null;
+    appState.lastGcode = null;
+    appState.lastGcodeFilename = null;
+    appState.lastGcodeSignature = null;
+
+    clearToolpath();
+    if (elements.svgLayer) elements.svgLayer.innerHTML = '';
+
+    if (elements.jobsContainer) {
+        elements.jobsContainer.innerHTML = '<div class="empty-state">No file loaded</div>';
+    }
+    if (elements.statsPanel) elements.statsPanel.style.display = 'none';
+    if (elements.statDim) elements.statDim.textContent = '—';
+    if (elements.statTime) elements.statTime.textContent = '—';
+
+    if (elements.exportBtn) elements.exportBtn.disabled = true;
+    if (elements.previewBtn) elements.previewBtn.disabled = true;
+    setDragToPlaceEnabled(false);
+
+    if (elements.loadedFile) elements.loadedFile.hidden = true;
+    if (elements.loadedFileName) {
+        elements.loadedFileName.textContent = '—';
+        elements.loadedFileName.title = '';
+    }
+    // Reset the input, or picking the same file again fires no change event.
+    if (elements.fileInput) elements.fileInput.value = '';
+
+    hideError();
+}
+
+/**
+ * Explain an empty job list.
+ *
+ * "No paths found" is true but useless: the file usually does contain shapes,
+ * and the reason none became a job is specific and fixable. A job needs a
+ * resolvable colour, and neither this parser nor the backend implements a CSS
+ * cascade, so shapes styled through a <style> block resolve to nothing.
+ *
+ * @returns {string}
+ */
+function explainNoJobs() {
+    const stats = appState.svgData && appState.svgData.stats;
+    if (!stats) return 'No paths found in SVG';
+
+    if (stats.uncoloured > 0 && (stats.hasStyleBlock || stats.classStyled > 0)) {
+        return `Found ${stats.uncoloured} shape(s), but their colours come from a ` +
+            `<style> block or CSS classes, which this tool does not read. ` +
+            `Re-export with presentation attributes ("plain SVG" in Inkscape), or ` +
+            `set a stroke colour on the shapes directly.`;
+    }
+    if (stats.uncoloured > 0) {
+        return `Found ${stats.uncoloured} shape(s), but none has a stroke or fill ` +
+            `colour. Give each shape a stroke colour - layers are identified by colour.`;
+    }
+    return 'No drawable shapes found in this SVG (paths, rects, circles, lines or polygons).';
+}
+
 function renderJobs(jobs) {
     if (!jobs || jobs.length === 0) {
-        elements.jobsContainer.innerHTML = '<div class="empty-state">No paths found in SVG</div>';
+        elements.jobsContainer.innerHTML =
+            `<div class="empty-state">${escapeHtml(explainNoJobs())}</div>`;
         return;
     }
 

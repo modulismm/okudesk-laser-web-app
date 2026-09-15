@@ -936,3 +936,42 @@ input[type=range]:focus-visible {
     stroke-linejoin: round;
     vector-effect: non-scaling-stroke;
 }
+
+
+/* Loaded-file row: shows what is open and allows removing it. Without this
+   there was no way to unload a file short of reloading the page. */
+.loaded-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.loaded-file[hidden] { display: none; }
+.loaded-file-name {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.loaded-file-remove {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.loaded-file-remove:hover { color: var(--danger); }
+.loaded-file-remove:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
