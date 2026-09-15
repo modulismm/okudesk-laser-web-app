@@ -1847,6 +1847,28 @@ def _element_color(el) -> Optional[str]:
     return _normalize_color(stroke)
 
 
+def _empty_vector_gcode() -> str:
+    """A syntactically valid program that cuts nothing.
+
+    Returned when the caller supplied jobs but none of them are enabled or
+    matched a colour in the document. The laser is never enabled, so this is
+    safe to send to the machine.
+    """
+    return (
+        ";$M Meta untilchar 000204\n"
+        ";$M NumOps 0\n"
+        ";$M Time 0\n"
+        "\n"
+        "M5 ; Turn laser off\n"
+        "G21 ; Units in mm\n"
+        "\n"
+        "; No enabled jobs matched the document - nothing to cut.\n"
+        "\n"
+        "G0 X0 Y0\n"
+        "M5 ; Turn laser off\n"
+    )
+
+
 def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bottom-left", origin_x: float = None, origin_y: float = None) -> str:
     """
     Advanced generation: use ordered per-color jobs coming from the UI.
@@ -1882,6 +1904,14 @@ def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bot
             continue
 
     if not requested:
+        # A caller that passed no `jobs` at all wants the legacy whole-file
+        # behaviour. But a caller that passed jobs which all resolved away -
+        # every layer disabled, or colours that matched nothing - asked for
+        # nothing to be cut. Falling through to the global path there cut every
+        # path in the document at 100% power, which is the opposite of what the
+        # user selected and can destroy the workpiece.
+        if jobs:
+            return _empty_vector_gcode()
         # fallback: single global
         return generate_vector_gcode(svg_path=svg_path, speed=1000, power=100.0, passes=1, origin=origin)
 
@@ -1918,6 +1948,11 @@ def generate_vector_gcode_advanced(svg_path: str, jobs: list, origin: str = "bot
         batches.append({'color': c, 'paths': paths, **s})
 
     if not batches:
+        # Same reasoning as the `not requested` guard above: the caller asked
+        # for specific colours and none of them are present in the document.
+        # Cutting the whole file at 100% power instead is never what was meant.
+        if jobs:
+            return _empty_vector_gcode()
         return generate_vector_gcode(svg_path=svg_path, speed=1000, power=100.0, passes=1, origin=origin)
 
     return _generate_gcode_from_job_batches(
