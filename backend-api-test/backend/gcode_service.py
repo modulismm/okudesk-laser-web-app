@@ -1610,11 +1610,18 @@ def _generate_gcode_from_paths(
     # Then anchor within the bed based on origin choice
     if origin == "custom":
         if origin_x is not None and origin_y is not None:
-            # Custom origin: user specifies exact X, Y position (in machine coordinates, bottom-left origin)
-            # We need to place the design so its top-left corner (after offset) is at (origin_x, origin_y)
-            # But SVG Y is top-down, machine Y is bottom-up, so we flip
+            # Custom origin: (origin_x, origin_y) is where the design's
+            # bottom-left corner goes, in machine coordinates.
+            #
+            # No Y flip here. Points were converted to machine Y-up above
+            # (my = svg_h_mm - p.y) and offset_y = -miny already puts the
+            # design's bottom edge at Y=0, so origin_y adds directly. The old
+            # `BED_H_MM - origin_y - height` applied a top-down formula to
+            # already-flipped coordinates, which double-flipped: custom (0,0)
+            # landed the job at the TOP of the bed, matching `top-left` instead
+            # of `bottom-left`, and disagreed with what the UI drew.
             offset_x += origin_x
-            offset_y += (BED_H_MM - origin_y - height)  # Flip Y: machine Y=0 is bottom, SVG Y=0 is top
+            offset_y += origin_y
         else:
             # Fallback to bottom-left if custom coords not provided
             origin = "bottom-left"
@@ -2053,11 +2060,12 @@ def _generate_gcode_from_job_batches(
     
     if origin == "custom":
         if origin_x is not None and origin_y is not None:
-            # Custom origin: user specifies exact X, Y position (in machine coordinates, bottom-left origin)
-            # We need to place the design so its top-left corner (after offset) is at (origin_x, origin_y)
-            # But SVG Y is top-down, machine Y is bottom-up, so we flip
+            # Custom origin: (origin_x, origin_y) is where the design's
+            # bottom-left corner goes, in machine coordinates. See the matching
+            # comment in generate_vector_gcode - no Y flip, the points are
+            # already machine Y-up and offset_y has zeroed the bottom edge.
             offset_x += origin_x
-            offset_y += (BED_H_MM - origin_y - h)  # Flip Y: machine Y=0 is bottom, SVG Y=0 is top
+            offset_y += origin_y
         else:
             # Fallback to bottom-left if custom coords not provided
             origin = "bottom-left"
