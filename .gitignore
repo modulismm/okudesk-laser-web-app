@@ -46,4 +46,6 @@ examples/
 firmware/
 docs/
 nomadtech/
-backend/  # legacy skeleton backend (we deploy backend-api-test/backend instead)
+# legacy skeleton backend (we deploy backend-api-test/backend instead)
+backend/
+.venv/
