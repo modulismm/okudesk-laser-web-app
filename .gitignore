@@ -46,6 +46,8 @@ examples/
 firmware/
 docs/
 nomadtech/
-# legacy skeleton backend (we deploy backend-api-test/backend instead)
-backend/
+# legacy skeleton backend (we deploy backend-api-test/backend instead).
+# Leading slash is required: an unanchored `backend/` matches at any depth
+# and would swallow backend-api-test/backend, which is the live backend.
+/backend/
 .venv/

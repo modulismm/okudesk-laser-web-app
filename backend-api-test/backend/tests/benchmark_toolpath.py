@@ -82,7 +82,9 @@ def _measure(gcode: str):
     rapid_mm = 0.0
     cut_mm = 0.0
     line_count = 0
-    last = None
+    # Machine starts at the origin; the first move off it is real travel.
+    # Starting from None silently dropped it from the totals.
+    last = (0.0, 0.0)
     reported_minutes = None
     computed_minutes = 0.0
 
@@ -127,7 +129,9 @@ def _measure_with_feed(gcode: str):
     rapid_mm = 0.0
     cut_mm = 0.0
     line_count = 0
-    last = None
+    # Machine starts at the origin; the first move off it is real travel.
+    # Starting from None silently dropped it from the totals.
+    last = (0.0, 0.0)
     reported_minutes = None
     computed_minutes = 0.0
     feed = 1000.0
