@@ -46,7 +46,7 @@
           <div>
             <div class="row">
               <label>Image</label>
-              <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" />
+              <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/svg+xml,.svg" />
             </div>
 
             <div class="row">
@@ -149,6 +149,8 @@
       </div>
     </div>
 
+    <!-- Shared with the vector app: SVG physical-size parsing lives in one place. -->
+    <script src="svg-parser.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       function setStatus(msg) { $("status").textContent = msg; }
@@ -191,6 +193,97 @@
           fr.onload = () => resolve(String(fr.result));
           fr.readAsDataURL(file);
         });
+      }
+
+      // Guard rails: the bed is 500x285 mm, so 0.01 mm/pixel would ask for a
+      // 50000 px wide canvas. Browsers fail at that silently or with an opaque
+      // error, so refuse early with a message that names the fix.
+      const MAX_SIDE_PX = 8000;
+      const MAX_TOTAL_PX = 24000000;
+
+      /**
+       * Rasterise an SVG file to a PNG data URL at a given mm/pixel scale.
+       *
+       * Uses the browser's own SVG renderer, so the result matches what the
+       * vector workspace shows and needs no server-side SVG library.
+       *
+       * Limitation: anything the SVG pulls in from outside itself - linked
+       * images, webfonts by URL - will not be present. Text renders with the
+       * fonts this machine has.
+       *
+       * @param {File} file
+       * @param {number} mmPerPixel
+       * @returns {Promise<{dataUrl: string, widthPx: number, heightPx: number, widthMm: number, heightMm: number}>}
+       */
+      async function rasterizeSvgFile(file, mmPerPixel) {
+        const text = await file.text();
+        const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+        if (doc.querySelector("parsererror")) {
+          throw new Error("This SVG could not be parsed - the file may be malformed.");
+        }
+        const svg = doc.querySelector("svg");
+        if (!svg) throw new Error("No <svg> element found in this file.");
+
+        const dims = new SVGParser().getDimensions(svg);
+        if (!(dims.width > 0) || !(dims.height > 0)) {
+          throw new Error("This SVG has no usable width/height or viewBox, so its physical size is unknown.");
+        }
+
+        const mpp = Number(mmPerPixel) > 0 ? Number(mmPerPixel) : 0.15;
+        const widthPx = Math.max(1, Math.round(dims.width / mpp));
+        const heightPx = Math.max(1, Math.round(dims.height / mpp));
+
+        if (widthPx > MAX_SIDE_PX || heightPx > MAX_SIDE_PX || widthPx * heightPx > MAX_TOTAL_PX) {
+          throw new Error(
+            `Rasterising this SVG at ${mpp} mm/pixel needs ${widthPx}x${heightPx} pixels, which is too large. ` +
+            `Increase "mm / pixel" (0.1 is a fine engraving resolution).`
+          );
+        }
+
+        // A viewBox is what lets width/height act as a scale. Without one the
+        // user-unit system is fixed at 96dpi and forcing a pixel size would
+        // crop or shrink the artwork instead of scaling it.
+        if (!svg.getAttribute("viewBox")) {
+          const pxPerMm = 96 / 25.4;
+          svg.setAttribute("viewBox", `0 0 ${dims.width * pxPerMm} ${dims.height * pxPerMm}`);
+        }
+        svg.setAttribute("width", String(widthPx));
+        svg.setAttribute("height", String(heightPx));
+        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+        const serialized = new XMLSerializer().serializeToString(svg);
+        // A blob URL is same-origin, so drawing it does not taint the canvas.
+        const url = URL.createObjectURL(new Blob([serialized], { type: "image/svg+xml;charset=utf-8" }));
+
+        try {
+          const img = await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error(
+              "The browser could not render this SVG. Files that link to external images " +
+              "or use <foreignObject> cannot be rasterised here - export to PNG instead."
+            ));
+            image.src = url;
+          });
+
+          const c = document.createElement("canvas");
+          c.width = widthPx;
+          c.height = heightPx;
+          const ctx = c.getContext("2d");
+          // White background: the engine burns dark pixels, so transparent
+          // areas must read as "no burn", not as black.
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, widthPx, heightPx);
+          ctx.drawImage(img, 0, 0, widthPx, heightPx);
+
+          return {
+            dataUrl: c.toDataURL("image/png"),
+            widthPx, heightPx,
+            widthMm: dims.width, heightMm: dims.height,
+          };
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       }
 
       function canvasToBlob(canvas) {
@@ -314,19 +407,30 @@
         const f = $("file").files && $("file").files[0];
         if (!f) return setStatus("Pick an image first.");
 
-        // Caught here as well as server-side: this is an SVG-centric app, so
-        // reaching for an SVG in raster mode is the natural mistake, and the
-        // server can only answer after the whole file has been uploaded.
-        const isSvg = f.type === "image/svg+xml" || /\.svg$/i.test(f.name || "");
-        if (isSvg) {
-          return setStatus(
-            "That is an SVG. Raster mode needs a bitmap (PNG, JPEG, WEBP, GIF or BMP). " +
-            "To cut or engrave an SVG use Vector mode; to raster it, export to PNG first."
-          );
-        }
+        const mpp = Number($("mpp").value);
 
-        setStatus("Encoding image…");
-        const dataUrl = await fileToDataURL(f);
+        // An SVG has no pixels of its own, so it is rasterised here, in the
+        // browser, at exactly the requested mm/pixel. The server sizes the job
+        // from the pixel count, so rasterising at that scale makes the physical
+        // size come out right without passing explicit dimensions.
+        const isSvg = f.type === "image/svg+xml" || /\.svg$/i.test(f.name || "");
+        let dataUrl;
+        if (isSvg) {
+          setStatus("Rasterising SVG…");
+          try {
+            const r = await rasterizeSvgFile(f, mpp);
+            dataUrl = r.dataUrl;
+            setStatus(
+              `Rasterised SVG to ${r.widthPx}x${r.heightPx} px ` +
+              `(${r.widthMm.toFixed(1)}x${r.heightMm.toFixed(1)} mm at ${mpp} mm/pixel). Encoding…`
+            );
+          } catch (e) {
+            return setStatus(`Error: ${e?.message || e}`);
+          }
+        } else {
+          setStatus("Encoding image…");
+          dataUrl = await fileToDataURL(f);
+        }
 
         const payload = {
           image_base64: dataUrl,

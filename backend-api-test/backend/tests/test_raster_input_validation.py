@@ -37,7 +37,8 @@ def test_svg_declared_as_svg_is_rejected_with_guidance():
         gs._decode_image_data(data_url(SVG_BYTES, "image/svg+xml"))
     msg = str(exc.value)
     assert "SVG" in msg
-    assert "Vector mode" in msg, "error should point at the mode that handles SVG"
+    assert "Vector mode" in msg, "error should point at the mode that cuts an SVG"
+    assert "raster page" in msg, "error should say the raster page rasterises SVG for you"
 
 
 def test_svg_mislabelled_is_still_detected_by_content():

@@ -1298,9 +1298,10 @@ def _decode_image_data(image_base64: str):
 
     if declared_mime == "image/svg+xml" or _looks_like_svg(raw):
         raise ValueError(
-            "This is an SVG, and raster mode needs a bitmap (PNG, JPEG, WEBP, GIF or BMP). "
-            "To cut or engrave an SVG, use Vector mode instead. To raster an SVG, export it "
-            "to PNG first."
+            "This endpoint needs a bitmap (PNG, JPEG, WEBP, GIF or BMP) and this is an SVG. "
+            "There is no SVG renderer on the server: the raster page rasterises SVGs in the "
+            "browser before sending them, so use that, or send an already-rendered PNG if you "
+            "are calling the API directly. To cut or score an SVG, use Vector mode."
         )
 
     try:
