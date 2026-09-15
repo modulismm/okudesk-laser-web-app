@@ -46,7 +46,7 @@ fi
 echo ""
 echo "✅ Démarrage du serveur API..."
 echo "   Frontend: Ouvre frontend/index.html dans un navigateur"
-echo "   API: http://localhost:5001 (ou port auto-détecté)"
-echo "   Note: Port changé à 5001 pour éviter conflit avec AirPlay sur macOS"
+echo "   API: http://localhost:${PORT:-8000}"
+echo "   Note: sur macOS, si le port 5000 est pris par AirPlay, definir PORT=5001"
 echo ""
 python app.py
