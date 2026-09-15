@@ -770,3 +770,130 @@ input[type=range]:focus-visible {
         justify-content: center;
     }
 }
+
+
+/* ============================================================
+   U2 - ZOOM / PAN
+   ============================================================ */
+
+.canvas-container {
+    /* Pan is a transform on the bed, not a scroll, so the container must clip
+       rather than grow scrollbars when the bed is dragged outside it. */
+    overflow: hidden;
+    position: relative;
+    cursor: grab;
+    touch-action: none;
+}
+.canvas-container.is-panning { cursor: grabbing; }
+
+.machine-bed {
+    /* Transform origin must be the top-left corner: the zoom-to-cursor maths
+       in app.js assumes screen = origin + translate + scale * bedPoint. With
+       the default 50% 50% the scale term would be measured from the centre. */
+    transform-origin: 0 0;
+    will-change: transform;
+}
+
+.zoom-level {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 42px;
+    text-align: center;
+    user-select: none;
+}
+
+/* ============================================================
+   U3 - REAL ERROR AND LOADING UI (replaces alert() / TODO stubs)
+   ============================================================ */
+
+.error-banner {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(640px, calc(100% - 32px));
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px 14px;
+    background: #2d1618;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    color: #ffd7d5;
+    font-size: 13px;
+    line-height: 1.5;
+    z-index: 200;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.error-banner[hidden] { display: none; }
+.error-banner-icon { color: var(--danger); flex-shrink: 0; }
+.error-banner-text { flex: 1; }
+.error-banner-close {
+    background: transparent;
+    border: none;
+    color: #ffd7d5;
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.error-banner-close:hover { color: #fff; }
+
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(15, 17, 21, 0.72);
+    z-index: 150;
+}
+.loading-overlay[hidden] { display: none; }
+.loading-text { font-size: 13px; color: var(--text-muted); }
+
+.spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+    .spinner { animation-duration: 2.4s; }
+}
+
+/* ============================================================
+   U4 - DRAG TO PLACE
+   ============================================================ */
+
+.svg-layer.is-draggable {
+    /* Normally pointer-events:none so drags fall through to the pan handler.
+       Enabled only when a job is loaded, so the job itself can be grabbed. */
+    pointer-events: auto;
+    cursor: move;
+}
+.svg-layer.is-dragging { opacity: 0.75; }
+
+.drag-hint {
+    position: absolute;
+    left: 50%;
+    /* Sits above .workspace-controls (bottom: 20px, ~36px tall). */
+    bottom: 68px;
+    transform: translateX(-50%);
+    padding: 3px 10px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 120;
+}
+.drag-hint[hidden] { display: none; }

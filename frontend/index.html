@@ -172,7 +172,20 @@
             <div id="rasterPanel" class="raster-panel" style="display:none;">
                 <iframe id="rasterFrame" title="Raster generator" src="about:blank"></iframe>
             </div>
+            <div id="errorBanner" class="error-banner" role="alert" aria-live="assertive" hidden>
+                <span class="error-banner-icon" aria-hidden="true">⚠</span>
+                <span id="errorBannerText" class="error-banner-text"></span>
+                <button id="errorBannerClose" class="error-banner-close" aria-label="Dismiss error">✕</button>
+            </div>
+            <div id="loadingOverlay" class="loading-overlay" hidden>
+                <div class="spinner" aria-hidden="true"></div>
+                <span id="loadingText" class="loading-text">Working…</span>
+            </div>
+            <div id="dragHint" class="drag-hint" hidden>Drag the job to place it</div>
             <div class="workspace-controls">
+                <button id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">−</button>
+                <span id="zoomLevel" class="zoom-level" aria-live="polite">100%</span>
+                <button id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
                 <button id="fitViewBtn" title="Fit to View" aria-label="Fit to View">⤢</button>
                 <button id="centerJobBtn" title="Center Job" aria-label="Center Job">⌖</button>
                 <span class="control-divider" role="separator"></span>

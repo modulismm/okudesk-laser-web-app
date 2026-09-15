@@ -27,8 +27,17 @@ const appState = {
     lastGcodeSignature: null,
     previewVisible: false,
     showRapids: true,
-    showOrder: true
+    showOrder: true,
+    // U2 view transform. The bed uses transform-origin 0 0, so the mapping is
+    // screen = bedLayoutOrigin + translate + scale * bedPoint.
+    view: { scale: 1, tx: 0, ty: 0 },
+    viewTouched: false
 };
+
+const MIN_SCALE = 0.1;
+const MAX_SCALE = 8;
+const BED_W_MM = 500;
+const BED_H_MM = 285;
 
 // Based on the Oku Desk material guide you provided (speed mm/min, power %, passes)
 // Defaults are picked as reasonable midpoints; user can still tweak per-layer after applying.
@@ -122,6 +131,15 @@ function init() {
         fitViewBtn: document.getElementById('fitViewBtn'),
         centerJobBtn: document.getElementById('centerJobBtn'),
         canvasContainer: document.getElementById('canvasContainer'),
+        zoomInBtn: document.getElementById('zoomInBtn'),
+        zoomOutBtn: document.getElementById('zoomOutBtn'),
+        zoomLevel: document.getElementById('zoomLevel'),
+        errorBanner: document.getElementById('errorBanner'),
+        errorBannerText: document.getElementById('errorBannerText'),
+        errorBannerClose: document.getElementById('errorBannerClose'),
+        loadingOverlay: document.getElementById('loadingOverlay'),
+        loadingText: document.getElementById('loadingText'),
+        dragHint: document.getElementById('dragHint'),
         originInputs: document.querySelectorAll('input[name="originMode"]'),
         originMarker: document.querySelector('.origin-marker'),
         customOriginInputs: document.getElementById('customOriginInputs'),
@@ -144,6 +162,8 @@ function init() {
     setupExport();
     setupControls();
     setupModeSwitch();
+    setupPanZoom();
+    setupDragToPlace();
     setupMaterialPresets();
     setupProjectLinks().finally(() => {
         maybeShowFirstRunModal();
@@ -151,7 +171,9 @@ function init() {
 
     // Initial view fit
     requestAnimationFrame(() => fitView());
-    window.addEventListener('resize', debounce(fitView, 250));
+    window.addEventListener('resize', debounce(() => {
+        if (appState.viewTouched) applyView(); else fitView();
+    }, 250));
 }
 
 async function setupProjectLinks() {
@@ -354,6 +376,15 @@ function setupExport() {
  * Setup control buttons
  */
 function setupControls() {
+    if (elements.zoomInBtn) {
+        elements.zoomInBtn.addEventListener('click', () => zoomBy(1.25));
+    }
+    if (elements.zoomOutBtn) {
+        elements.zoomOutBtn.addEventListener('click', () => zoomBy(1 / 1.25));
+    }
+    if (elements.errorBannerClose) {
+        elements.errorBannerClose.addEventListener('click', hideError);
+    }
     if (elements.fitViewBtn) {
         elements.fitViewBtn.addEventListener('click', fitView);
     }
@@ -376,12 +407,14 @@ function setupControls() {
         if (elements.originX) {
             elements.originX.addEventListener('input', () => {
                 appState.originX = parseFloat(elements.originX.value) || 0;
+                updateOriginMarker();
                 if (appState.svgData) renderWorkspace(appState.svgData);
             });
         }
         if (elements.originY) {
             elements.originY.addEventListener('input', () => {
                 appState.originY = parseFloat(elements.originY.value) || 0;
+                updateOriginMarker();
                 if (appState.svgData) renderWorkspace(appState.svgData);
             });
         }
@@ -496,10 +529,13 @@ function updateOriginMarker() {
     if (appState.originMode === 'custom') {
         m.classList.add('origin-custom');
         // Position custom marker at specified coordinates
-        const x = Math.min(Math.max(appState.originX, 0), 500);
-        const y = Math.min(Math.max(285 - appState.originY, 0), 285); // Flip Y for SVG
-        m.style.left = `${(x / 500) * 100}%`;
-        m.style.bottom = `${(y / 285) * 100}%`;
+        const x = Math.min(Math.max(appState.originX, 0), BED_W_MM);
+        // No flip here: `bottom` is already measured up from the bed's bottom
+        // edge, which is the same direction originY uses. Subtracting from the
+        // bed height mirrored the marker vertically.
+        const y = Math.min(Math.max(appState.originY, 0), BED_H_MM);
+        m.style.left = `${(x / BED_W_MM) * 100}%`;
+        m.style.bottom = `${(y / BED_H_MM) * 100}%`;
         m.style.top = 'auto';
         m.style.right = 'auto';
         m.style.transform = 'none';
@@ -535,6 +571,7 @@ async function loadFile(file) {
         
         elements.exportBtn.disabled = false;
         if (elements.previewBtn) elements.previewBtn.disabled = false;
+        setDragToPlaceEnabled(true);
         elements.statsPanel.style.display = 'block';
         
         showLoading(false);
@@ -993,35 +1030,336 @@ function downloadText(text, filename) {
 /**
  * Fit bed view to container
  */
-function fitView() {
-    const { canvasContainer } = elements;
+/**
+ * The machine bed's unscaled layout origin inside the canvas container.
+ * offsetLeft/Top are unaffected by transforms, so this stays stable while
+ * panning and zooming.
+ * @returns {{x: number, y: number}|null}
+ */
+function getBedLayoutOrigin() {
     const bed = document.querySelector('.machine-bed');
-    
-    if (!canvasContainer || !bed) return;
-    
-    const padding = 40;
-    const availW = canvasContainer.clientWidth - padding * 2;
-    const availH = canvasContainer.clientHeight - padding * 2;
-    
-    if (availW <= 0 || availH <= 0) return;
-    
-    const scaleW = availW / 500;
-    const scaleH = availH / 285;
-    const scale = Math.min(scaleW, scaleH, 1); // Don't scale up
-    
-    bed.style.transform = `scale(${scale})`;
-    appState.scale = scale;
+    if (!bed) return null;
+    return { x: bed.offsetLeft, y: bed.offsetTop };
 }
 
 /**
- * Center job in workspace
+ * Push the current view transform onto the bed.
+ */
+function applyView() {
+    const bed = document.querySelector('.machine-bed');
+    if (!bed) return;
+    const { scale, tx, ty } = appState.view;
+    bed.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    // Mirrored onto appState.scale, which is what the drag-to-place maths reads
+    // to convert screen pixels back to millimetres.
+    appState.scale = scale;
+    if (elements.zoomLevel) {
+        elements.zoomLevel.textContent = `${Math.round(scale * 100)}%`;
+    }
+}
+
+/**
+ * Fit the whole bed in the viewport and centre it.
+ */
+function fitView() {
+    const { canvasContainer } = elements;
+    const origin = getBedLayoutOrigin();
+    if (!canvasContainer || !origin) return;
+
+    const padding = 40;
+    const availW = canvasContainer.clientWidth - padding * 2;
+    const availH = canvasContainer.clientHeight - padding * 2;
+    if (availW <= 0 || availH <= 0) return;
+
+    // Fit only - never scale a small bed up past 1:1 on load.
+    const scale = Math.min(availW / BED_W_MM, availH / BED_H_MM, 1);
+    appState.viewTouched = false;
+    centreAt(scale);
+}
+
+/**
+ * Centre the bed in the container at a given scale.
+ * @param {number} scale
+ */
+function centreAt(scale) {
+    const { canvasContainer } = elements;
+    const origin = getBedLayoutOrigin();
+    if (!canvasContainer || !origin) return;
+
+    appState.view.scale = clampScale(scale);
+    const s = appState.view.scale;
+    appState.view.tx = (canvasContainer.clientWidth - BED_W_MM * s) / 2 - origin.x;
+    appState.view.ty = (canvasContainer.clientHeight - BED_H_MM * s) / 2 - origin.y;
+    applyView();
+}
+
+/** @param {number} s @returns {number} */
+function clampScale(s) {
+    return Math.max(MIN_SCALE, Math.min(MAX_SCALE, s));
+}
+
+/**
+ * Zoom about a fixed point so whatever is under the cursor stays put.
+ *
+ * With transform-origin 0 0: screen = origin + t + s * bedPoint, so the bed
+ * point under the cursor is p = (screen - origin - t) / s, and holding it fixed
+ * across a scale change gives t' = screen - origin - s' * p.
+ *
+ * @param {number} factor - Multiplier applied to the current scale
+ * @param {number} [clientX] - Anchor in viewport coords; defaults to container centre
+ * @param {number} [clientY]
+ */
+function zoomBy(factor, clientX, clientY) {
+    const { canvasContainer } = elements;
+    const origin = getBedLayoutOrigin();
+    if (!canvasContainer || !origin) return;
+
+    const rect = canvasContainer.getBoundingClientRect();
+    const mx = (clientX === undefined ? rect.left + rect.width / 2 : clientX) - rect.left;
+    const my = (clientY === undefined ? rect.top + rect.height / 2 : clientY) - rect.top;
+
+    const { scale: s, tx, ty } = appState.view;
+    const next = clampScale(s * factor);
+    if (next === s) return;
+
+    const px = (mx - origin.x - tx) / s;
+    const py = (my - origin.y - ty) / s;
+
+    appState.view.scale = next;
+    appState.view.tx = mx - origin.x - next * px;
+    appState.view.ty = my - origin.y - next * py;
+    appState.viewTouched = true;
+    applyView();
+}
+
+/**
+ * Centre the view on the loaded job rather than on the bed.
+ *
+ * Previously a stub that just called fitView(), so the button did nothing
+ * useful once a job was loaded off-centre.
  */
 function centerJob() {
-    if (!appState.svgData || !appState.svgElement) return;
-    
-    // TODO: Implement centering logic
-    fitView();
+    const { canvasContainer } = elements;
+    const origin = getBedLayoutOrigin();
+    if (!appState.svgData || !canvasContainer || !origin) {
+        fitView();
+        return;
+    }
+
+    const place = getJobPlacement();
+    if (!place) {
+        fitView();
+        return;
+    }
+
+    const padding = 60;
+    const availW = canvasContainer.clientWidth - padding * 2;
+    const availH = canvasContainer.clientHeight - padding * 2;
+    if (availW <= 0 || availH <= 0) return;
+
+    // Zoom to the job, but never past 1:1 and never below the fit-whole-bed scale.
+    const jobW = Math.max(place.w, 1);
+    const jobH = Math.max(place.h, 1);
+    const scale = clampScale(Math.min(availW / jobW, availH / jobH, 1));
+
+    // Job centre in bed coordinates (SVG y-down, matching renderWorkspace).
+    const cx = place.x + jobW / 2;
+    const cy = place.y + jobH / 2;
+
+    appState.view.scale = scale;
+    appState.view.tx = canvasContainer.clientWidth / 2 - origin.x - scale * cx;
+    appState.view.ty = canvasContainer.clientHeight / 2 - origin.y - scale * cy;
+    appState.viewTouched = true;
+    applyView();
 }
+
+/**
+ * Where the job sits on the bed, in bed coordinates (SVG y-down).
+ * Mirrors the placement switch in renderWorkspace().
+ * @returns {{x: number, y: number, w: number, h: number}|null}
+ */
+function getJobPlacement() {
+    const data = appState.svgData;
+    if (!data || !data.dimensions) return null;
+
+    const w = data.dimensions.width;
+    const h = data.dimensions.height;
+    let x = 0;
+    let y = BED_H_MM - h;
+
+    switch (appState.originMode) {
+        case 'top-left':     x = 0;                    y = 0;                    break;
+        case 'top-right':    x = BED_W_MM - w;         y = 0;                    break;
+        case 'bottom-right': x = BED_W_MM - w;         y = BED_H_MM - h;         break;
+        case 'center':       x = (BED_W_MM - w) / 2;   y = (BED_H_MM - h) / 2;   break;
+        case 'custom':
+            x = Math.max(0, Math.min(appState.originX, BED_W_MM - w));
+            y = Math.max(0, Math.min(BED_H_MM - appState.originY - h, BED_H_MM - h));
+            break;
+        default:             x = 0;                    y = BED_H_MM - h;
+    }
+    return { x, y, w, h };
+}
+
+/**
+ * U2: wheel zoom and drag panning on the workspace.
+ */
+function setupPanZoom() {
+    const { canvasContainer } = elements;
+    if (!canvasContainer) return;
+
+    canvasContainer.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        // Normalise across deltaMode (lines vs pixels) so a trackpad and a
+        // mouse wheel feel roughly the same.
+        const unit = e.deltaMode === 1 ? 16 : 1;
+        const factor = Math.exp(-e.deltaY * unit * 0.0015);
+        zoomBy(factor, e.clientX, e.clientY);
+    }, { passive: false });
+
+    let panning = false;
+    let lastX = 0;
+    let lastY = 0;
+    let pointerId = null;
+
+    canvasContainer.addEventListener('pointerdown', (e) => {
+        // Left button only, and not when a job drag has claimed the event.
+        if (e.button !== 0 || e.defaultPrevented) return;
+        panning = true;
+        pointerId = e.pointerId;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        canvasContainer.classList.add('is-panning');
+        canvasContainer.setPointerCapture(pointerId);
+    });
+
+    canvasContainer.addEventListener('pointermove', (e) => {
+        if (!panning || e.pointerId !== pointerId) return;
+        appState.view.tx += e.clientX - lastX;
+        appState.view.ty += e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        appState.viewTouched = true;
+        applyView();
+    });
+
+    const endPan = (e) => {
+        if (!panning || (pointerId !== null && e.pointerId !== pointerId)) return;
+        panning = false;
+        canvasContainer.classList.remove('is-panning');
+        if (pointerId !== null && canvasContainer.hasPointerCapture(pointerId)) {
+            canvasContainer.releasePointerCapture(pointerId);
+        }
+        pointerId = null;
+    };
+    canvasContainer.addEventListener('pointerup', endPan);
+    canvasContainer.addEventListener('pointercancel', endPan);
+
+    // Keyboard zoom, so the workspace is not mouse-only.
+    canvasContainer.setAttribute('tabindex', '0');
+    canvasContainer.addEventListener('keydown', (e) => {
+        if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomBy(1.2); }
+        else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomBy(1 / 1.2); }
+        else if (e.key === '0') { e.preventDefault(); fitView(); }
+    });
+}
+
+/**
+ * U4: drag the job on the bed to place it, switching to custom origin.
+ */
+function setupDragToPlace() {
+    const layer = elements.svgLayer;
+    if (!layer) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startY = 0;
+    let startOriginX = 0;
+    let startOriginY = 0;
+    let pointerId = null;
+
+    layer.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !appState.svgData) return;
+        // Claim the event so setupPanZoom's handler ignores it.
+        e.preventDefault();
+        e.stopPropagation();
+
+        const place = getJobPlacement();
+        if (!place) return;
+
+        dragging = true;
+        pointerId = e.pointerId;
+        startX = e.clientX;
+        startY = e.clientY;
+
+        // Seed custom coordinates from wherever the job currently sits, so the
+        // first drag from a preset origin does not jump.
+        startOriginX = place.x;
+        startOriginY = BED_H_MM - place.y - place.h;
+
+        layer.classList.add('is-dragging');
+        layer.setPointerCapture(pointerId);
+    });
+
+    layer.addEventListener('pointermove', (e) => {
+        if (!dragging || e.pointerId !== pointerId) return;
+
+        const place = getJobPlacement();
+        if (!place) return;
+
+        // 1 bed pixel is 1 mm, so screen delta / scale converts straight to mm.
+        const s = appState.view.scale || 1;
+        const dxMm = (e.clientX - startX) / s;
+        const dyMm = (e.clientY - startY) / s;
+
+        // Screen Y is down; origin Y is measured up from the bed's bottom edge.
+        const maxX = Math.max(0, BED_W_MM - place.w);
+        const maxY = Math.max(0, BED_H_MM - place.h);
+        appState.originX = Math.max(0, Math.min(startOriginX + dxMm, maxX));
+        appState.originY = Math.max(0, Math.min(startOriginY - dyMm, maxY));
+
+        switchToCustomOrigin();
+        renderWorkspace(appState.svgData);
+        updateOriginMarker();
+    });
+
+    const endDrag = (e) => {
+        if (!dragging || (pointerId !== null && e.pointerId !== pointerId)) return;
+        dragging = false;
+        layer.classList.remove('is-dragging');
+        if (pointerId !== null && layer.hasPointerCapture(pointerId)) {
+            layer.releasePointerCapture(pointerId);
+        }
+        pointerId = null;
+    };
+    layer.addEventListener('pointerup', endDrag);
+    layer.addEventListener('pointercancel', endDrag);
+}
+
+/**
+ * Flip the origin control to "custom" and sync its inputs to appState.
+ */
+function switchToCustomOrigin() {
+    if (appState.originMode !== 'custom') {
+        appState.originMode = 'custom';
+        if (elements.originInputs) {
+            elements.originInputs.forEach(i => { i.checked = (i.value === 'custom'); });
+        }
+        updateCustomOriginVisibility();
+    }
+    if (elements.originX) elements.originX.value = appState.originX.toFixed(1);
+    if (elements.originY) elements.originY.value = appState.originY.toFixed(1);
+}
+
+/**
+ * Enable or disable job dragging depending on whether a job is loaded.
+ * @param {boolean} enabled
+ */
+function setDragToPlaceEnabled(enabled) {
+    if (elements.svgLayer) elements.svgLayer.classList.toggle('is-draggable', enabled);
+    if (elements.dragHint) elements.dragHint.hidden = !enabled;
+}
+
 
 /**
  * Show/hide loading state
@@ -1043,6 +1381,10 @@ function showLoading(show) {
     if (elements.canvasContainer) {
         elements.canvasContainer.setAttribute('aria-busy', String(busy));
     }
+    if (elements.loadingOverlay) {
+        elements.loadingOverlay.hidden = !busy;
+    }
+    if (busy) hideError();
 }
 
 /**
@@ -1050,8 +1392,24 @@ function showLoading(show) {
  * @param {string} message - Error message
  */
 function showError(message) {
-    alert(message); // TODO: Replace with better UI
     console.error(message);
+
+    const { errorBanner, errorBannerText } = elements;
+    if (!errorBanner || !errorBannerText) {
+        // Last resort only: an alert() is better than swallowing a failure that
+        // may mean the operator is about to cut the wrong thing.
+        alert(message);
+        return;
+    }
+    errorBannerText.textContent = message;
+    errorBanner.hidden = false;
+}
+
+/**
+ * Dismiss the error banner.
+ */
+function hideError() {
+    if (elements.errorBanner) elements.errorBanner.hidden = true;
 }
 
 /**
