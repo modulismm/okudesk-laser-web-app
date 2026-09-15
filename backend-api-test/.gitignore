@@ -22,3 +22,5 @@ Thumbs.db
 *.tmp
 *.log
 *.gco
+# ...except committed golden-file test fixtures
+!backend/tests/fixtures/*.gco

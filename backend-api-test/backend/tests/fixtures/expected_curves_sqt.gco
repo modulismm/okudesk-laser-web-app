@@ -1,0 +1,41 @@
+;$M Meta untilchar 000203
+;$M Frame X40.00 Y40.00
+;$M Pos X0.00 Y0.00
+;$M NumOps 1
+;$M Op 0
+;$M Type Vector
+;$M Speed 800
+;$M Power 40.0
+;$M Rep 1
+;$M Time 1
+;$M Thumb start X1 Y1
+;$MT FF
+;$M Thumb end
+
+M5 ; Turn laser off
+G21 ; Units in mm
+
+; --- Job #00ff00 ---
+F800
+G0 X0 Y40
+M3 S102
+G1 X3.7305 Y39.5508
+G1 X7.3438 Y38.2812
+G1 X10.7227 Y36.3086
+G1 X13.75 Y33.75
+G1 X16.3086 Y30.7227
+G1 X18.2812 Y27.3438
+G1 X19.5508 Y23.7305
+G1 X20 Y20
+G1 X20.4492 Y16.2695
+G1 X21.7188 Y12.6562
+G1 X23.6914 Y9.2773
+G1 X26.25 Y6.25
+G1 X29.2773 Y3.6914
+G1 X32.6562 Y1.7188
+G1 X36.2695 Y0.4492
+G1 X40 Y0
+M5
+G0 X0 Y0
+
+M5 ; Turn laser off

@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="50mm" height="50mm">
+  <path d="M 5,5 L 45,5 L 45,45 L 5,45 Z" stroke="#ff0000" fill="none" />
+</svg>
