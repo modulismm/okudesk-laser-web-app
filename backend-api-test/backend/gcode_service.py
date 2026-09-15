@@ -1705,8 +1705,21 @@ def _generate_gcode_from_paths(
                     if not laser_on:
                         out.append(f"M3 S{power_s}\n")
                         laser_on = True
-                    if i == len(pts) - 1 and first_move is not None and abs(mx - first_move[0]) < ZERO_MOVE_THRESHOLD and abs(my - first_move[1]) < ZERO_MOVE_THRESHOLD:
-                        continue
+                    # NOTE: previously this also skipped the point when it was
+                    # merely the LAST point of the path and equal to
+                    # `first_move`, regardless of distance from the
+                    # immediately preceding emitted point (`last`). That is
+                    # wrong: for an explicitly closed contour (M...L...Z)
+                    # whose closing edge is represented by exactly one final
+                    # point coincident with the start, that final point is
+                    # real geometry -- the closing cut -- not a redundant
+                    # duplicate. Skipping it silently left the last edge of
+                    # every explicitly-closed shape un-cut. The zero-length
+                    # dedup a few lines up (gated on proximity to `last`,
+                    # the actual previous position) already correctly
+                    # handles the genuinely redundant case where a tool
+                    # emits both an explicit closing L and a Z back to the
+                    # same point.
                     out.append(f"G1 X{_fmt(mx)} Y{_fmt(my)}\n")
 
                 last = (mx, my)
@@ -2118,8 +2131,13 @@ def _generate_gcode_from_job_batches(
                         if not laser_on:
                             out.append(f"M3 S{power_s}\n")
                             laser_on = True
-                        if i == len(pts) - 1 and first_move is not None and abs(mx - first_move[0]) < ZERO_MOVE_THRESHOLD and abs(my - first_move[1]) < ZERO_MOVE_THRESHOLD:
-                            continue
+                        # See note in _generate_gcode_from_paths: do NOT skip
+                        # this point just because it's the path's last point
+                        # and equals `first_move` -- for a closed contour
+                        # (M...L...Z) that final point IS the closing edge's
+                        # real endpoint, not a redundant duplicate. The
+                        # zero-length dedup above (gated on `last`) already
+                        # handles genuine duplicates correctly.
                         out.append(f"G1 X{_fmt(mx)} Y{_fmt(my)}\n")
                     last = (mx, my)
                 if laser_on:
