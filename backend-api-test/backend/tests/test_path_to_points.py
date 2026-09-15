@@ -114,9 +114,13 @@ def test_smooth_quadratic_after_quadratic():
     pts = _path_to_points(d)
     coords = [(p.x, p.y) for p in pts]
     assert last_xy(pts) == pytest.approx((40, 20))
-    # All points from the T segment onward should sit at y=20 (straight line)
-    # since control point (30,20) is collinear with the endpoints.
-    t_segment_points = coords[len(coords) // 2 :]
+    # All points with x >= 20 belong to the T segment (Q ends exactly at
+    # x=20), which should sit at y=20 (straight line) since control point
+    # (30,20) is collinear with the endpoints. (Not sliced by index/2: with
+    # adaptive segment counts, Q and T no longer necessarily contribute the
+    # same number of points each.)
+    t_segment_points = [(x, y) for x, y in coords if x >= 20 - 1e-9]
+    assert len(t_segment_points) >= 2
     for x, y in t_segment_points:
         assert y == pytest.approx(20, abs=1e-6)
 
