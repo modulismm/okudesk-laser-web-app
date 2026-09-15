@@ -1241,22 +1241,62 @@ def _fmt3(n: float) -> str:
     return f"{float(n):.3f}"
 
 
+def _looks_like_svg(raw: bytes) -> bool:
+    """True if these bytes are an SVG document rather than a bitmap."""
+    head = raw[:512].lstrip()
+    if head[:5].lower() == b"<?xml":
+        return b"<svg" in raw[:2048].lower()
+    return head[:4].lower() == b"<svg"
+
+
 def _decode_image_data(image_base64: str):
     """
     Accepts a raw base64 string or a data URL: data:image/png;base64,...
     Returns a Pillow Image.
+
+    Raises ValueError with an actionable message when the payload is not a
+    bitmap Pillow can open. Feeding an SVG here is the common mistake - this is
+    an SVG-centric app, and the raster picker's `accept="image/*"` offers them -
+    and Pillow's own error for that case is just "cannot identify image file
+    <_io.BytesIO object at 0x...>", which says nothing useful to a user.
     """
-    from PIL import Image  # type: ignore
+    from PIL import Image, UnidentifiedImageError  # type: ignore
     s = (image_base64 or "").strip()
     if not s:
         raise ValueError("image_base64 is required")
+
+    declared_mime = None
     if s.startswith("data:"):
         comma = s.find(",")
         if comma == -1:
             raise ValueError("Invalid data URL")
+        header = s[5:comma]
+        declared_mime = header.split(";")[0].strip().lower() or None
         s = s[comma + 1 :]
-    raw = base64.b64decode(s)
-    return Image.open(BytesIO(raw))
+
+    try:
+        raw = base64.b64decode(s)
+    except Exception as exc:
+        raise ValueError(f"Image data is not valid base64: {exc}") from exc
+
+    if not raw:
+        raise ValueError("Image data is empty")
+
+    if declared_mime == "image/svg+xml" or _looks_like_svg(raw):
+        raise ValueError(
+            "This is an SVG, and raster mode needs a bitmap (PNG, JPEG, WEBP, GIF or BMP). "
+            "To cut or engrave an SVG, use Vector mode instead. To raster an SVG, export it "
+            "to PNG first."
+        )
+
+    try:
+        return Image.open(BytesIO(raw))
+    except UnidentifiedImageError as exc:
+        kind = f" (declared as {declared_mime})" if declared_mime else ""
+        raise ValueError(
+            f"Could not read this image{kind}. Raster mode supports PNG, JPEG, WEBP, GIF and "
+            "BMP. Formats such as HEIC or AVIF are not supported - convert to PNG first."
+        ) from exc
 
 
 def _apply_gamma_lut(im_l, gamma: float):

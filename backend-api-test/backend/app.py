@@ -357,6 +357,14 @@ def generate_raster():
             'filename': 'oku-raster.gco',
             'size': len(gcode_content)
         })
+    except ValueError as e:
+        # Bad input, not a server fault: unreadable or unsupported image, empty
+        # or non-base64 payload. _decode_image_data raises these with a message
+        # written for the user, so pass it straight through.
+        return jsonify({
+            'error': str(e),
+            'status': 'invalid-image',
+        }), 400
     except ImportError as e:
         # Pillow and numpy are imported lazily inside gcode_service, so the app
         # starts fine without them and only raster requests fail. Without this
