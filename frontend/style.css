@@ -1,3 +1,39 @@
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/inter-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('fonts/inter-500.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('fonts/inter-600.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('fonts/jbmono-400.woff2') format('woff2');
+}
+@font-face {
+    font-family: 'JetBrains Mono';
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('fonts/jbmono-700.woff2') format('woff2');
+}
+
 :root {
     --bg-app: #0f1115;
     --bg-sidebar: #161b22;
@@ -17,6 +53,18 @@
 }
 
 * { box-sizing: border-box; }
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
 
 body {
     margin: 0;
@@ -166,11 +214,26 @@ h3 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margi
     color: var(--text-muted);
 }
 .origin-opt-wide { grid-column: span 2; }
-.origin-opt input { display: none; }
+.origin-opt input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+    opacity: 0;
+}
 .origin-opt:has(input:checked) {
     border-color: var(--accent);
     color: var(--accent);
     box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.15) inset;
+}
+.origin-opt:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 .file-drop-area {
@@ -538,3 +601,115 @@ input[type=range]::-webkit-slider-thumb {
 input[type=range]::-webkit-slider-thumb:hover { background: var(--accent); }
 
 .empty-state { text-align: center; color: var(--text-muted); padding-top: 40px; }
+
+/* FOCUS-VISIBLE (keyboard-focus ring) */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+.file-drop-area:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+input[type=range]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+.select:focus-visible {
+    border-color: var(--accent);
+}
+
+/* REDUCED MOTION */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        transition-duration: 0.001ms !important;
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+    }
+    .machine-bed {
+        transition: none;
+    }
+}
+
+/* RESPONSIVE BREAKPOINTS */
+
+/* Below ~1100px: narrow the right jobs sidebar so the workspace keeps room to breathe. */
+@media (max-width: 1100px) {
+    .app-container {
+        grid-template-columns: 240px 1fr 240px;
+    }
+    .app-container.mode-raster {
+        grid-template-columns: 240px 1fr;
+    }
+}
+
+/* Below ~820px: stack into a single column with normal page scrolling. */
+@media (max-width: 820px) {
+    html, body {
+        height: auto;
+        min-height: 100dvh;
+        overflow: visible;
+    }
+
+    .app-container {
+        display: flex;
+        flex-direction: column;
+        height: auto;
+        min-height: 100dvh;
+    }
+    .app-container.mode-raster {
+        display: flex;
+        flex-direction: column;
+    }
+
+    aside {
+        border: none;
+        border-bottom: 1px solid var(--border);
+        max-height: none;
+    }
+    .sidebar-left {
+        overflow-y: visible;
+        order: 1;
+    }
+
+    .workspace-area {
+        order: 2;
+        min-height: 60vh;
+        overflow: visible;
+    }
+    .canvas-container {
+        padding: 20px;
+    }
+
+    .sidebar-right {
+        order: 3;
+        border-bottom: none;
+    }
+    .jobs-container {
+        overflow-y: visible;
+    }
+
+    /* Touch targets: enlarge job move buttons and origin tiles */
+    .job-move {
+        min-width: 44px;
+        min-height: 44px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+    }
+    .origin-opt {
+        min-height: 44px;
+        padding: 10px 0;
+    }
+    .toggle-job {
+        min-width: 44px;
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+    }
+}
