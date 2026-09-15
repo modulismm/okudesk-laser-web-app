@@ -455,15 +455,32 @@ def _arc_to_points(
     return pts
 
 
+def _quad_bezier_point(p0, p1, p2, t: float) -> Tuple[float, float]:
+    mt = 1.0 - t
+    x = mt * mt * p0[0] + 2 * mt * t * p1[0] + t * t * p2[0]
+    y = mt * mt * p0[1] + 2 * mt * t * p1[1] + t * t * p2[1]
+    return x, y
+
+
 def _path_to_points(d: str) -> List[Pt]:
     """
     Convert SVG path 'd' to a list of Pt(x,y,cmd) in *user units* (pre-scaling).
-    Supports: M, L, H, V, Z, C (cubic bezier approximated), A (elliptical arc approximated).
+    Supports: M, L, H, V, Z, C, S (cubic bezier + smooth variant), Q, T (quadratic
+    bezier + smooth variant), A (elliptical arc), all approximated by line segments.
+
+    An unrecognized command raises ValueError rather than being silently dropped,
+    since silently ignoring a command both drops geometry AND fails to advance the
+    current point, displacing every subsequent command in the path.
     """
     ops = _split_ops(d)
     pts: List[Pt] = []
     cx = cy = 0.0
     sx = sy = 0.0  # start of subpath
+
+    # Track the previous command (uppercase) and its trailing control point,
+    # needed to compute reflected control points for S/s and T/t.
+    prev_cmd: Optional[str] = None
+    prev_ctrl: Optional[Tuple[float, float]] = None
 
     for op in ops:
         if not op:
@@ -491,6 +508,7 @@ def _path_to_points(d: str) -> List[Pt]:
                     cy = cy + y if rel else y
                     pts.append(Pt(cx, cy, "L"))
                     i += 2
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "L":
@@ -502,24 +520,28 @@ def _path_to_points(d: str) -> List[Pt]:
                 cy = cy + y if rel else y
                 pts.append(Pt(cx, cy, "L"))
                 i += 2
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "H":
             for x in args:
                 cx = cx + x if rel else x
                 pts.append(Pt(cx, cy, "L"))
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "V":
             for y in args:
                 cy = cy + y if rel else y
                 pts.append(Pt(cx, cy, "L"))
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "Z":
             # close path
             cx, cy = sx, sy
             pts.append(Pt(cx, cy, "L"))
+            prev_cmd, prev_ctrl = T, None
             continue
 
         if T == "C":
@@ -543,7 +565,89 @@ def _path_to_points(d: str) -> List[Pt]:
                     bx, by = _bezier_point(p0, p1, p2, p3, tt)
                     pts.append(Pt(bx, by, "L"))
                 cx, cy = p3
+                prev_ctrl = p2
                 i += 6
+            prev_cmd = T
+            continue
+
+        if T == "S":
+            # Smooth cubic bezier: reflect previous C/S second control point about
+            # the current point to get this segment's first control point.
+            segs = 8
+            i = 0
+            while i + 3 < len(args):
+                x2, y2, x3, y3 = args[i : i + 4]
+                p0 = (cx, cy)
+                if prev_cmd in ("C", "S") and prev_ctrl is not None:
+                    p1 = (2 * cx - prev_ctrl[0], 2 * cy - prev_ctrl[1])
+                else:
+                    p1 = (cx, cy)
+                if rel:
+                    p2 = (cx + x2, cy + y2)
+                    p3 = (cx + x3, cy + y3)
+                else:
+                    p2 = (x2, y2)
+                    p3 = (x3, y3)
+
+                for k in range(1, segs + 1):
+                    tt = k / segs
+                    bx, by = _bezier_point(p0, p1, p2, p3, tt)
+                    pts.append(Pt(bx, by, "L"))
+                cx, cy = p3
+                prev_ctrl = p2
+                prev_cmd = "S"
+                i += 4
+            continue
+
+        if T == "Q":
+            # Quadratic bezier, elevated to cubic form for reuse of _bezier_point.
+            segs = 8
+            i = 0
+            while i + 3 < len(args):
+                x1, y1, x2, y2 = args[i : i + 4]
+                p0 = (cx, cy)
+                if rel:
+                    p1 = (cx + x1, cy + y1)
+                    p2 = (cx + x2, cy + y2)
+                else:
+                    p1 = (x1, y1)
+                    p2 = (x2, y2)
+
+                for k in range(1, segs + 1):
+                    tt = k / segs
+                    bx, by = _quad_bezier_point(p0, p1, p2, tt)
+                    pts.append(Pt(bx, by, "L"))
+                cx, cy = p2
+                prev_ctrl = p1
+                prev_cmd = "Q"
+                i += 4
+            continue
+
+        if T == "T":
+            # Smooth quadratic: reflect previous Q/T control point about the
+            # current point; if no such previous command, control point == current point.
+            segs = 8
+            i = 0
+            while i + 1 < len(args):
+                x2, y2 = args[i], args[i + 1]
+                p0 = (cx, cy)
+                if prev_cmd in ("Q", "T") and prev_ctrl is not None:
+                    p1 = (2 * cx - prev_ctrl[0], 2 * cy - prev_ctrl[1])
+                else:
+                    p1 = (cx, cy)
+                if rel:
+                    p2 = (cx + x2, cy + y2)
+                else:
+                    p2 = (x2, y2)
+
+                for k in range(1, segs + 1):
+                    tt = k / segs
+                    bx, by = _quad_bezier_point(p0, p1, p2, tt)
+                    pts.append(Pt(bx, by, "L"))
+                cx, cy = p2
+                prev_ctrl = p1
+                prev_cmd = "T"
+                i += 2
             continue
 
         if T == "A":
@@ -564,10 +668,13 @@ def _path_to_points(d: str) -> List[Pt]:
                     pts.append(Pt(ax, ay, "L"))
                 cx, cy = x2, y2
                 i += 7
+            prev_cmd, prev_ctrl = T, None
             continue
 
-        # Unsupported commands are ignored for now
-        # (A arcs, Q/T quadratic, S smooth cubic, etc.)
+        # A genuinely unknown command must not be silently ignored: dropping it
+        # both loses geometry and fails to advance (cx, cy), displacing every
+        # subsequent command in the path.
+        raise ValueError(f"Unsupported SVG path command: {t!r} in path data {d!r}")
 
     return pts
 
