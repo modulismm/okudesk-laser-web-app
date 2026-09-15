@@ -128,9 +128,18 @@
                     <span>Est. Time:</span>
                     <span id="statTime" class="highlight-time">—</span>
                 </div>
+                <div class="stat-row toolpath-stat" id="statCutRow" style="display:none;">
+                    <span>Cut distance:</span>
+                    <span id="statCut">—</span>
+                </div>
+                <div class="stat-row toolpath-stat" id="statRapidRow" style="display:none;">
+                    <span>Travel distance:</span>
+                    <span id="statRapid">—</span>
+                </div>
             </div>
 
             <div class="action-area">
+                <button id="previewBtn" class="btn-secondary vector-only" disabled>Preview Toolpath</button>
                 <button id="exportBtn" class="btn-primary vector-only" disabled>Generate G-Code</button>
                 <a id="openRasterTab" class="btn-secondary raster-only" href="/raster" target="_blank" rel="noopener noreferrer" style="display:none;">
                     Open Raster in new tab
@@ -154,6 +163,8 @@
                     <div class="grid-lines"></div>
                     <!-- The SVG Content Layer -->
                     <div id="svgLayer" class="svg-layer"></div>
+                    <!-- Toolpath Overlay (rendered from the emitted G-code) -->
+                    <div id="toolpathLayer" class="toolpath-layer"></div>
                     <!-- Origin Marker -->
                     <div class="origin-marker"></div>
                 </div>
@@ -164,6 +175,13 @@
             <div class="workspace-controls">
                 <button id="fitViewBtn" title="Fit to View" aria-label="Fit to View">⤢</button>
                 <button id="centerJobBtn" title="Center Job" aria-label="Center Job">⌖</button>
+                <span class="control-divider" role="separator"></span>
+                <button id="toggleRapidsBtn" class="toggle-btn" title="Show travel moves"
+                        aria-label="Show travel moves" aria-pressed="true" disabled>Travel</button>
+                <button id="toggleOrderBtn" class="toggle-btn" title="Colour cuts by order"
+                        aria-label="Colour cuts by order" aria-pressed="true" disabled>Order</button>
+                <button id="clearPreviewBtn" title="Clear toolpath preview"
+                        aria-label="Clear toolpath preview" disabled>✕</button>
             </div>
         </main>
 
@@ -216,6 +234,7 @@
 
     <script src="svg-parser.js"></script>
     <script src="gcode-generator.js"></script>
+    <script src="toolpath-preview.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

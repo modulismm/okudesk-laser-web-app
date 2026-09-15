@@ -512,6 +512,63 @@ h3 { font-size: 12px; text-transform: uppercase; color: var(--text-muted); margi
     padding: 4px 8px;
 }
 .workspace-controls button:hover { color: var(--accent); }
+.workspace-controls button:disabled { opacity: 0.35; cursor: default; }
+.workspace-controls button:disabled:hover { color: var(--text-main); }
+.workspace-controls button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+
+.control-divider {
+    width: 1px;
+    align-self: stretch;
+    background: var(--border);
+    margin: 0 2px;
+}
+
+.toggle-btn {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-radius: 4px !important;
+}
+.toggle-btn.active { color: var(--accent); background: rgba(88, 166, 255, 0.12); }
+
+/* TOOLPATH PREVIEW OVERLAY */
+.toolpath-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+.toolpath-layer svg { overflow: visible; }
+
+/* Strokes are scaled with the bed, so non-scaling-stroke keeps hairlines
+   hairline-thin at any zoom instead of ballooning with the transform. */
+.toolpath-cuts line,
+.toolpath-rapids line {
+    vector-effect: non-scaling-stroke;
+    stroke-linecap: round;
+}
+.toolpath-cuts line {
+    stroke: var(--accent);
+    stroke-width: 1.5;
+}
+.toolpath-rapids line {
+    stroke: var(--text-muted);
+    stroke-width: 0.75;
+    stroke-dasharray: 3 3;
+    opacity: 0.55;
+}
+
+.toolpath-stat span:last-child { font-family: var(--font-mono); }
+
+.btn-primary.is-busy,
+.btn-secondary.is-busy { opacity: 0.6; cursor: progress; }
 
 /* RIGHT SIDEBAR - JOBS */
 .sidebar-right { border-left: 1px solid var(--border); border-right: none; padding: 0; }

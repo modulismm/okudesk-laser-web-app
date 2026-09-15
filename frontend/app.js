@@ -7,6 +7,7 @@
 // Initialize parsers
 const svgParser = new SVGParser();
 const gcodeGen = new GCodeGenerator();
+const toolpathPreview = new ToolpathPreview();
 
 // Application state
 const appState = {
@@ -18,7 +19,15 @@ const appState = {
     originY: 0,
     mode: 'vector',
     rasterEnabled: false,
-    rasterUrl: '/raster'
+    rasterUrl: '/raster',
+    // Toolpath preview. lastGcode is cached so Generate can reuse what Preview
+    // already fetched instead of paying for a second backend round-trip.
+    lastGcode: null,
+    lastGcodeFilename: null,
+    lastGcodeSignature: null,
+    previewVisible: false,
+    showRapids: true,
+    showOrder: true
 };
 
 // Based on the Oku Desk material guide you provided (speed mm/min, power %, passes)
@@ -97,6 +106,15 @@ function init() {
         jobsContainer: document.getElementById('jobsContainer'),
         svgLayer: document.getElementById('svgLayer'),
         exportBtn: document.getElementById('exportBtn'),
+        previewBtn: document.getElementById('previewBtn'),
+        toolpathLayer: document.getElementById('toolpathLayer'),
+        toggleRapidsBtn: document.getElementById('toggleRapidsBtn'),
+        toggleOrderBtn: document.getElementById('toggleOrderBtn'),
+        clearPreviewBtn: document.getElementById('clearPreviewBtn'),
+        statCut: document.getElementById('statCut'),
+        statRapid: document.getElementById('statRapid'),
+        statCutRow: document.getElementById('statCutRow'),
+        statRapidRow: document.getElementById('statRapidRow'),
         statDim: document.getElementById('statDim'),
         statTime: document.getElementById('statTime'),
         statsPanel: document.getElementById('statsPanel'),
@@ -311,6 +329,25 @@ function setupFileInput() {
  */
 function setupExport() {
     elements.exportBtn.addEventListener('click', generateAndDownload);
+
+    if (elements.previewBtn) {
+        elements.previewBtn.addEventListener('click', previewToolpath);
+    }
+    if (elements.toggleRapidsBtn) {
+        elements.toggleRapidsBtn.addEventListener('click', () => {
+            appState.showRapids = !appState.showRapids;
+            redrawToolpath();
+        });
+    }
+    if (elements.toggleOrderBtn) {
+        elements.toggleOrderBtn.addEventListener('click', () => {
+            appState.showOrder = !appState.showOrder;
+            redrawToolpath();
+        });
+    }
+    if (elements.clearPreviewBtn) {
+        elements.clearPreviewBtn.addEventListener('click', clearToolpath);
+    }
 }
 
 /**
@@ -497,6 +534,7 @@ async function loadFile(file) {
         updateStats();
         
         elements.exportBtn.disabled = false;
+        if (elements.previewBtn) elements.previewBtn.disabled = false;
         elements.statsPanel.style.display = 'block';
         
         showLoading(false);
@@ -513,6 +551,12 @@ async function loadFile(file) {
  */
 function renderWorkspace(data) {
     elements.svgLayer.innerHTML = '';
+    // The overlay describes the previous job's G-code; drop it rather than
+    // leave a toolpath on screen that no longer matches what is loaded.
+    clearToolpath();
+    appState.lastGcode = null;
+    appState.lastGcodeFilename = null;
+    appState.lastGcodeSignature = null;
     updateOriginMarker();
     
     // Create bed SVG container
@@ -762,6 +806,7 @@ function generateAndDownload() {
         // geometry on real-world SVGs. There is intentionally no client-side
         // fallback for the actual cut file - if the backend fails, we must
         // surface that clearly rather than silently downloading wrong G-code.
+        showLoading(true);
         generateViaBackend(travelSpeed);
 
     } catch (err) {
@@ -770,33 +815,68 @@ function generateAndDownload() {
     }
 }
 
-async function generateViaBackend(travelSpeed) {
+/**
+ * Build the request payload for the backend generator.
+ * @param {number} travelSpeed
+ * @returns {Object}
+ */
+function buildGeneratePayload(travelSpeed) {
     const svgString = appState.svgData?.svgString;
     if (!svgString) throw new Error('Missing SVG source');
 
-    let data;
-    try {
-        const payload = {
-            svg_content: svgString,
-            origin: appState.originMode,
-            travel_speed: travelSpeed,
-            jobs: appState.svgData.jobs
-        };
-        if (appState.originMode === 'custom') {
-            payload.origin_x = appState.originX;
-            payload.origin_y = appState.originY;
-        }
-        const res = await fetch('/api/generate-vector-advanced', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        data = await res.json();
-        if (res.ok && data && data.success && data.gcode) {
-            downloadText(data.gcode, data.filename || 'oku-job.gco');
-            return;
-        }
+    const payload = {
+        svg_content: svgString,
+        origin: appState.originMode,
+        travel_speed: travelSpeed,
+        jobs: appState.svgData.jobs
+    };
+    if (appState.originMode === 'custom') {
+        payload.origin_x = appState.originX;
+        payload.origin_y = appState.originY;
+    }
+    return payload;
+}
+
+/**
+ * Fetch G-code from the backend, reusing the cached result only when the
+ * request is byte-for-byte the one that produced it.
+ *
+ * The cache key is the serialised payload rather than a dirty flag: a preview
+ * the user saw must never be downloadable as a file that was generated from
+ * different settings. If anything about the job changed, we re-fetch.
+ *
+ * @param {number} travelSpeed
+ * @returns {Promise<{gcode: string, filename: string}>}
+ */
+async function requestGcode(travelSpeed) {
+    const payload = buildGeneratePayload(travelSpeed);
+    const signature = JSON.stringify(payload);
+
+    if (appState.lastGcode && appState.lastGcodeSignature === signature) {
+        return { gcode: appState.lastGcode, filename: appState.lastGcodeFilename };
+    }
+
+    const res = await fetch('/api/generate-vector-advanced', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+
+    if (!(res.ok && data && data.success && data.gcode)) {
         throw new Error(data?.error || data?.details || 'Backend generation failed');
+    }
+
+    appState.lastGcode = data.gcode;
+    appState.lastGcodeFilename = data.filename || 'oku-job.gco';
+    appState.lastGcodeSignature = signature;
+    return { gcode: appState.lastGcode, filename: appState.lastGcodeFilename };
+}
+
+async function generateViaBackend(travelSpeed) {
+    try {
+        const { gcode, filename } = await requestGcode(travelSpeed);
+        downloadText(gcode, filename);
     } catch (e) {
         // No client-side fallback here on purpose (see comment in
         // generateAndDownload()) - a silently-downloaded wrong G-code file
@@ -807,7 +887,95 @@ async function generateViaBackend(travelSpeed) {
             reason +
             '). Nothing was downloaded. Check that the backend server is running and that the SVG is valid.'
         );
+    } finally {
+        showLoading(false);
     }
+}
+
+/**
+ * Generate G-code and draw it over the bed without downloading anything.
+ */
+async function previewToolpath() {
+    if (!appState.svgData) {
+        showError('No file loaded');
+        return;
+    }
+
+    const travelSpeed = parseInt(elements.travelSpeed.value) || 5000;
+    showLoading(true);
+
+    try {
+        const { gcode } = await requestGcode(travelSpeed);
+        appState.previewVisible = true;
+        redrawToolpath();
+    } catch (e) {
+        const reason = e?.message || String(e);
+        showError(
+            'Could not preview the toolpath: the backend failed to generate G-code (' +
+            reason +
+            '). The preview shows the real emitted G-code, so there is nothing to draw ' +
+            'until generation succeeds.'
+        );
+    } finally {
+        showLoading(false);
+    }
+}
+
+/**
+ * Redraw the cached toolpath with the current display toggles.
+ */
+function redrawToolpath() {
+    if (!appState.previewVisible || !appState.lastGcode || !elements.toolpathLayer) return;
+
+    const parsed = toolpathPreview.render(elements.toolpathLayer, appState.lastGcode, {
+        showRapids: appState.showRapids,
+        showOrder: appState.showOrder
+    });
+
+    updateToolpathStats(parsed);
+    syncToolpathControls();
+}
+
+/**
+ * Remove the preview overlay and reset its controls.
+ */
+function clearToolpath() {
+    appState.previewVisible = false;
+    toolpathPreview.clear(elements.toolpathLayer);
+    if (elements.statCutRow) elements.statCutRow.style.display = 'none';
+    if (elements.statRapidRow) elements.statRapidRow.style.display = 'none';
+    syncToolpathControls();
+}
+
+/**
+ * Show measured cut and travel distance from the parsed toolpath.
+ * @param {Object} parsed - Result of ToolpathPreview.parse()
+ */
+function updateToolpathStats(parsed) {
+    if (elements.statCut) {
+        elements.statCut.textContent = `${parsed.cutLength.toFixed(1)} mm`;
+    }
+    if (elements.statRapid) {
+        elements.statRapid.textContent = `${parsed.rapidLength.toFixed(1)} mm`;
+    }
+    if (elements.statCutRow) elements.statCutRow.style.display = '';
+    if (elements.statRapidRow) elements.statRapidRow.style.display = '';
+}
+
+/**
+ * Keep the toolpath control buttons in sync with state.
+ */
+function syncToolpathControls() {
+    const on = appState.previewVisible;
+    const set = (btn, enabled, pressed) => {
+        if (!btn) return;
+        btn.disabled = !enabled;
+        if (pressed !== undefined) btn.setAttribute('aria-pressed', String(pressed));
+        btn.classList.toggle('active', Boolean(pressed) && enabled);
+    };
+    set(elements.toggleRapidsBtn, on, appState.showRapids);
+    set(elements.toggleOrderBtn, on, appState.showOrder);
+    set(elements.clearPreviewBtn, on);
 }
 
 function downloadText(text, filename) {
@@ -859,9 +1027,21 @@ function centerJob() {
  * Show/hide loading state
  */
 function showLoading(show) {
-    // TODO: Add loading indicator
-    if (show) {
-        elements.exportBtn.disabled = true;
+    // Both buttons are disabled while a request is in flight. This used to be
+    // one-way - showLoading(false) did nothing - which left the export button
+    // permanently disabled after the first generation.
+    const busy = Boolean(show);
+    const hasFile = Boolean(appState.svgData);
+
+    if (elements.exportBtn) {
+        elements.exportBtn.disabled = busy || !hasFile;
+        elements.exportBtn.classList.toggle('is-busy', busy);
+    }
+    if (elements.previewBtn) {
+        elements.previewBtn.disabled = busy || !hasFile;
+    }
+    if (elements.canvasContainer) {
+        elements.canvasContainer.setAttribute('aria-busy', String(busy));
     }
 }
 
