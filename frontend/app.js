@@ -38,6 +38,7 @@ const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
 const BED_W_MM = 500;
 const BED_H_MM = 285;
+const SVG_NS = 'http://www.w3.org/2000/svg';
 
 // Based on the Oku Desk material guide you provided (speed mm/min, power %, passes)
 // Defaults are picked as reasonable midpoints; user can still tweak per-layer after applying.
@@ -595,55 +596,253 @@ function renderWorkspace(data) {
     appState.lastGcodeFilename = null;
     appState.lastGcodeSignature = null;
     updateOriginMarker();
-    
+
     // Create bed SVG container
-    const bedSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    bedSvg.setAttribute('viewBox', '0 0 500 285');
+    const bedSvg = document.createElementNS(SVG_NS, 'svg');
+    bedSvg.setAttribute('viewBox', `0 0 ${BED_W_MM} ${BED_H_MM}`);
     bedSvg.setAttribute('width', '100%');
     bedSvg.setAttribute('height', '100%');
-    
-    // Clone user SVG and position it
-    const userSvg = data.element.cloneNode(true);
-    const w = data.dimensions.width;
-    const h = data.dimensions.height;
-    let x = 0;
-    let y = 285 - h; // bottom-left default (SVG y-down)
 
-    switch (appState.originMode) {
-        case 'top-left':
-            x = 0;
-            y = 0;
-            break;
-        case 'top-right':
-            x = 500 - w;
-            y = 0;
-            break;
-        case 'bottom-right':
-            x = 500 - w;
-            y = 285 - h;
-            break;
-        case 'center':
-            x = (500 - w) / 2;
-            y = (285 - h) / 2;
-            break;
-        case 'custom':
-            x = Math.max(0, Math.min(appState.originX, 500 - w));
-            y = Math.max(0, Math.min(285 - appState.originY - h, 285 - h));
-            break;
-        default:
-            x = 0;
-            y = 285 - h;
+    // Placement comes from getJobPlacement() rather than a second copy of the
+    // origin switch. Two copies of this logic is how the preview and the cut
+    // file drifted apart before (see the custom-origin fix).
+    const place = getJobPlacement();
+    if (!place) {
+        elements.svgLayer.appendChild(bedSvg);
+        appState.svgElement = bedSvg;
+        return;
     }
 
-    userSvg.setAttribute('x', String(x));
-    userSvg.setAttribute('y', String(y));
-    userSvg.setAttribute('width', String(data.dimensions.width));
-    userSvg.setAttribute('height', String(data.dimensions.height));
+    // Clone user SVG and position it
+    const userSvg = data.element.cloneNode(true);
+    userSvg.setAttribute('x', String(place.x));
+    userSvg.setAttribute('y', String(place.y));
+    userSvg.setAttribute('width', String(place.w));
+    userSvg.setAttribute('height', String(place.h));
     userSvg.removeAttribute('id');
-    
+    // Stroke/fill are normalised to white by CSS via this class: an imported
+    // SVG can carry any colour, including black, which is invisible on the
+    // dark bed.
+    userSvg.setAttribute('class', 'user-svg');
+
     bedSvg.appendChild(userSvg);
+    bedSvg.appendChild(buildJobBounds(place));
+
     elements.svgLayer.appendChild(bedSvg);
+    // After insertion: normalizeArtworkColors reads getComputedStyle, which
+    // only resolves inheritance once the node is in the document.
+    normalizeArtworkColors(userSvg);
     appState.svgElement = bedSvg;
+}
+
+
+/* ============================================================
+   ARTWORK COLOUR NORMALISATION
+   ============================================================ */
+
+// The machine bed's background (--bed-bg). Artwork contrast is measured
+// against this, not against black.
+const BED_BG_RGB = { r: 0x0d, g: 0x11, b: 0x17 };
+// WCAG-style contrast floor, verified against the bed background by porting
+// this maths to Python and checking real colours. 3.0 (the graphics threshold)
+// left black at #616161, too dim for a hairline stroke; 4.5 lifts it to #808080
+// while leaving already-bright colours such as pure red untouched.
+const MIN_ARTWORK_CONTRAST = 4.5;
+
+/**
+ * Parse a CSS colour into RGB. Handles the rgb()/rgba() forms getComputedStyle
+ * returns, plus hex literals. Returns null for none/transparent/unparseable.
+ * @param {string} value
+ * @returns {{r: number, g: number, b: number}|null}
+ */
+function parseCssColor(value) {
+    if (!value) return null;
+    const v = String(value).trim().toLowerCase();
+    if (!v || v === 'none' || v === 'transparent') return null;
+
+    const fn = v.match(/^rgba?\(([^)]+)\)$/);
+    if (fn) {
+        const parts = fn[1].split(/[\s,/]+/).filter(Boolean);
+        if (parts.length < 3) return null;
+        // A fully transparent colour carries no visual information.
+        if (parts.length >= 4 && parseFloat(parts[3]) === 0) return null;
+        const [r, g, b] = parts.slice(0, 3).map(n => parseInt(n, 10));
+        if ([r, g, b].some(n => !Number.isFinite(n))) return null;
+        return { r, g, b };
+    }
+
+    let hex = v.startsWith('#') ? v.slice(1) : null;
+    if (hex && hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    if (hex && hex.length === 6 && /^[0-9a-f]{6}$/.test(hex)) {
+        return {
+            r: parseInt(hex.slice(0, 2), 16),
+            g: parseInt(hex.slice(2, 4), 16),
+            b: parseInt(hex.slice(4, 6), 16)
+        };
+    }
+    return null;
+}
+
+/**
+ * WCAG relative luminance.
+ * @param {{r: number, g: number, b: number}} rgb
+ * @returns {number} 0..1
+ */
+function relativeLuminance(rgb) {
+    const channel = (c) => {
+        const x = c / 255;
+        return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+/**
+ * WCAG contrast ratio between two colours.
+ * @returns {number} 1..21
+ */
+function contrastRatio(a, b) {
+    const la = relativeLuminance(a);
+    const lb = relativeLuminance(b);
+    return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** @returns {{h: number, s: number, l: number}} h in 0..360, s/l in 0..1 */
+function rgbToHsl({ r, g, b }) {
+    const rn = r / 255, gn = g / 255, bn = b / 255;
+    const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn);
+    const l = (max + min) / 2;
+    const d = max - min;
+    if (d === 0) return { h: 0, s: 0, l };
+    const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    let h;
+    if (max === rn) h = ((gn - bn) / d) % 6;
+    else if (max === gn) h = (bn - rn) / d + 2;
+    else h = (rn - gn) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+    return { h, s, l };
+}
+
+/** @returns {{r: number, g: number, b: number}} */
+function hslToRgb({ h, s, l }) {
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = h / 60;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let rgb;
+    if (hp < 1) rgb = [c, x, 0];
+    else if (hp < 2) rgb = [x, c, 0];
+    else if (hp < 3) rgb = [0, c, x];
+    else if (hp < 4) rgb = [0, x, c];
+    else if (hp < 5) rgb = [x, 0, c];
+    else rgb = [c, 0, x];
+    const m = l - c / 2;
+    return {
+        r: Math.round((rgb[0] + m) * 255),
+        g: Math.round((rgb[1] + m) * 255),
+        b: Math.round((rgb[2] + m) * 255)
+    };
+}
+
+/**
+ * Raise a colour's lightness until it reads against the bed, keeping its hue
+ * and saturation so the layer stays recognisable. A black stroke has no hue,
+ * so it lifts to near-white; a navy lifts to a bright blue, not to white.
+ *
+ * @param {{r: number, g: number, b: number}} rgb
+ * @returns {{r: number, g: number, b: number}}
+ */
+function liftForContrast(rgb) {
+    if (contrastRatio(rgb, BED_BG_RGB) >= MIN_ARTWORK_CONTRAST) return rgb;
+
+    const hsl = rgbToHsl(rgb);
+    // Walk lightness up in small steps rather than solving analytically: the
+    // luminance curve is per-channel and hue-dependent, so stepping is both
+    // simpler and predictable.
+    for (let l = hsl.l; l <= 0.92; l += 0.02) {
+        const candidate = hslToRgb({ h: hsl.h, s: hsl.s, l });
+        if (contrastRatio(candidate, BED_BG_RGB) >= MIN_ARTWORK_CONTRAST) {
+            return candidate;
+        }
+    }
+    return hslToRgb({ h: hsl.h, s: hsl.s, l: 0.92 });
+}
+
+/** @returns {string} CSS hex */
+function rgbToCss({ r, g, b }) {
+    const hx = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+    return `#${hx(r)}${hx(g)}${hx(b)}`;
+}
+
+const ARTWORK_SHAPES = 'path, rect, circle, ellipse, line, polyline, polygon';
+
+/**
+ * Give every shape in the imported artwork an explicit, legible stroke.
+ *
+ * Per-layer colour is the point: a job is identified by its colour in the
+ * sidebar, so recolouring everything to one value would throw that away. Only
+ * colours that fail the contrast floor against the bed are lifted, and they
+ * keep their hue - a dark red stays red.
+ *
+ * Must run after the node is in the document: it reads getComputedStyle, which
+ * is what resolves inherited stroke from parent <g> elements and any <style>
+ * block inside the imported file.
+ *
+ * @param {SVGElement} root - The cloned user SVG, already attached to the DOM
+ */
+function normalizeArtworkColors(root) {
+    if (!root) return;
+    const shapes = root.querySelectorAll(ARTWORK_SHAPES);
+
+    for (const el of shapes) {
+        const computed = window.getComputedStyle(el);
+        // Mirrors the backend's _element_color(): stroke wins, fill is the
+        // fallback for shapes drawn as filled areas.
+        const source = parseCssColor(computed.stroke) || parseCssColor(computed.fill);
+        const colour = source ? rgbToCss(liftForContrast(source)) : null;
+
+        // setProperty with 'important' is required: source SVGs commonly carry
+        // stroke in an inline style attribute, which outranks a stylesheet rule.
+        el.style.setProperty('stroke', colour || 'var(--artwork-stroke)', 'important');
+        el.style.setProperty('fill', 'none', 'important');
+    }
+}
+
+/**
+ * A bounding outline around the imported artwork, so its position and extent
+ * on the bed are obvious at a glance.
+ *
+ * @param {{x: number, y: number, w: number, h: number}} place - Bed coords, SVG y-down
+ * @returns {SVGElement}
+ */
+function buildJobBounds(place) {
+    const group = document.createElementNS(SVG_NS, 'g');
+    group.setAttribute('class', 'job-bounds');
+
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', String(place.x));
+    rect.setAttribute('y', String(place.y));
+    rect.setAttribute('width', String(Math.max(place.w, 0)));
+    rect.setAttribute('height', String(Math.max(place.h, 0)));
+    group.appendChild(rect);
+
+    // Solid corner brackets read as deliberate registration marks and stay
+    // legible when the dashed rect gets small at low zoom.
+    const arm = Math.max(Math.min(place.w, place.h) * 0.12, 2);
+    const corners = [
+        [place.x, place.y, 1, 1],
+        [place.x + place.w, place.y, -1, 1],
+        [place.x, place.y + place.h, 1, -1],
+        [place.x + place.w, place.y + place.h, -1, -1]
+    ];
+    for (const [cx, cy, sx, sy] of corners) {
+        const path = document.createElementNS(SVG_NS, 'path');
+        path.setAttribute('d',
+            `M ${cx + sx * arm} ${cy} L ${cx} ${cy} L ${cx} ${cy + sy * arm}`);
+        path.setAttribute('class', 'job-bounds-corner');
+        group.appendChild(path);
+    }
+
+    return group;
 }
 
 /**
@@ -1175,7 +1374,12 @@ function centerJob() {
 
 /**
  * Where the job sits on the bed, in bed coordinates (SVG y-down).
- * Mirrors the placement switch in renderWorkspace().
+ *
+ * Single source of truth for placement - renderWorkspace(), centerJob() and
+ * drag-to-place all read it. It used to be duplicated in renderWorkspace, and
+ * placement logic drifting between two copies is what put the workspace preview
+ * and the emitted G-code in different places (see the custom-origin fix).
+ *
  * @returns {{x: number, y: number, w: number, h: number}|null}
  */
 function getJobPlacement() {

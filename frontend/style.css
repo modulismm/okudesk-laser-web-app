@@ -47,6 +47,11 @@
     --success: #3fb950;
     --bed-bg: #0d1117;
     --grid-color: #21262d;
+    /* Fallback outline colour, used only when an element has no resolvable
+       stroke or fill. Per-layer colours are preserved; see
+       normalizeArtworkColors(). */
+    --artwork-stroke: #e6edf3;
+    --job-bounds: #ff2d95;  /* fluo pink - where the object sits on the bed */
     
     --font-mono: 'JetBrains Mono', monospace;
     --font-sans: 'Inter', sans-serif;
@@ -897,3 +902,37 @@ input[type=range]:focus-visible {
     z-index: 120;
 }
 .drag-hint[hidden] { display: none; }
+
+
+/* ============================================================
+   IMPORTED ARTWORK + JOB BOUNDS
+   ============================================================ */
+
+/* Imported artwork is drawn as outlines - the laser cuts the outline, not the
+   fill. Stroke COLOUR is deliberately not set here: it is assigned per element
+   in normalizeArtworkColors() so each layer keeps its own colour, with only
+   too-dark colours lifted for contrast against the bed. */
+.svg-layer .user-svg,
+.svg-layer .user-svg * {
+    fill: none !important;
+    stroke-width: 1px !important;
+    vector-effect: non-scaling-stroke;
+}
+
+.job-bounds rect {
+    fill: none;
+    stroke: var(--job-bounds);
+    stroke-width: 1px;
+    stroke-dasharray: 5 4;
+    opacity: 0.9;
+    vector-effect: non-scaling-stroke;
+}
+
+.job-bounds-corner {
+    fill: none;
+    stroke: var(--job-bounds);
+    stroke-width: 2px;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}

@@ -357,6 +357,17 @@ def generate_raster():
             'filename': 'oku-raster.gco',
             'size': len(gcode_content)
         })
+    except ImportError as e:
+        # Pillow and numpy are imported lazily inside gcode_service, so the app
+        # starts fine without them and only raster requests fail. Without this
+        # branch that surfaces as a generic 500, which is a slow thing to
+        # diagnose from the UI. Listed in requirements.txt.
+        return jsonify({
+            'error': 'Raster dependencies are not installed on the server',
+            'details': str(e),
+            'hint': 'Raster needs Pillow and numpy. Install requirements.txt and restart.',
+            'status': 'missing-dependency',
+        }), 503
     except Exception as e:
         import traceback
         return jsonify({
